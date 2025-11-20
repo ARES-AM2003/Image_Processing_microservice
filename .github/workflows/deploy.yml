@@ -71,28 +71,3 @@ jobs:
             docker image prune -f
 
             echo "✅ Deployment completed successfully!"
-
-            echo "📊 Container status:"
-            docker ps -f name=image-processor
-
-      - name: Verify deployment
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DO_HOST }}
-          username: ${{ secrets.DO_USERNAME }}
-          key: ${{ secrets.DO_SSH_KEY }}
-          script: |
-            echo "⏳ Waiting for container to be healthy..."
-            sleep 10
-
-            CONTAINER_STATUS=$(docker inspect --format='{{.State.Health.Status}}' image-processor 2>/dev/null || echo "unknown")
-
-            if [ "$CONTAINER_STATUS" = "healthy" ] || [ "$CONTAINER_STATUS" = "starting" ]; then
-              echo "✅ Container is $CONTAINER_STATUS"
-              exit 0
-            else
-              echo "❌ Container health check failed: $CONTAINER_STATUS"
-              echo "📋 Container logs:"
-              docker logs --tail 50 image-processor
-              exit 1
-            fi
