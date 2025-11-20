@@ -4,10 +4,10 @@ FROM node:18-alpine AS builder
 WORKDIR /app
 
 # Install build dependencies and image processing libraries
+# Note: dcraw has been removed from Alpine 3.21+, libraw provides RAW support
 RUN apk add --no-cache \
     vips-dev \
     libraw-dev \
-    dcraw \
     imagemagick \
     libheif-dev \
     build-base \
@@ -39,13 +39,14 @@ FROM node:18-alpine
 WORKDIR /app
 
 # Install only runtime dependencies for image processing
+# libraw provides comprehensive RAW format support (ARW, CR2, NEF, DNG, etc.)
 RUN apk add --no-cache \
     vips \
     libraw \
-    dcraw \
     imagemagick \
     libheif \
-    tini
+    tini \
+    wget
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
