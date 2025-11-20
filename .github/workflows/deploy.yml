@@ -56,10 +56,12 @@ jobs:
             echo "🚀 Starting new container..."
             docker run -d \
               --name image-processor \
-              --network fotosfolio_network \
+              --network live-db-redis_fotosfolio-production-network \
               --env-file /opt/image-processor/.env \
               -p 3001 \
               --restart unless-stopped \
+              --memory=1g \
+              --memory-swap=1g \
               --health-cmd='wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1' \
               --health-interval=30s \
               --health-retries=3 \

@@ -868,6 +868,11 @@ export class ImageProcessor extends WorkerHost {
         outputFormat = "jpeg";
       }
 
+      // Log upload parameters for debugging
+      this.logger.log(
+        `📤 Starting upload: Bucket=${bucket}, Key=${previewKey}, ContentType=${contentType}`,
+      );
+
       // Direct upload stream - no PassThrough needed
       const uploadStream = this.s3Client.upload({
         Bucket: bucket,
@@ -885,6 +890,20 @@ export class ImageProcessor extends WorkerHost {
       downloadStream.pipe(sharpTransform); // Single pipe, no PassThrough
 
       const uploadResult = await uploadStream.promise();
+
+      // Log upload result details for debugging
+      this.logger.log(
+        `📤 Upload successful: ${previewKey} → ETag: ${uploadResult.ETag}, Location: ${uploadResult.Location}`,
+      );
+
+      // Verify the file was actually uploaded by checking if it exists
+      try {
+        await this.s3Client.headObject({ Bucket: bucket, Key: previewKey }).promise();
+        this.logger.log(`✅ Verified: ${previewKey} exists in S3`);
+      } catch (verifyError) {
+        this.logger.error(`❌ Upload verification failed for ${previewKey}: ${verifyError.message}`);
+        throw new Error(`Upload verification failed: ${verifyError.message}`);
+      }
 
       const endTime = Date.now();
       const endMemory = process.memoryUsage();
