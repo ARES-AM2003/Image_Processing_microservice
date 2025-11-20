@@ -9,6 +9,7 @@ import { promisify } from "util";
 import { exec } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { PassThrough } from "stream";
 const decode = require("heic-decode");
 const execAsync = promisify(exec);
 
@@ -873,21 +874,39 @@ export class ImageProcessor extends WorkerHost {
         `📤 Starting upload: Bucket=${bucket}, Key=${previewKey}, ContentType=${contentType}`,
       );
 
-      // Direct upload stream - no PassThrough needed
+      // Create PassThrough stream for proper pipeline
+      const passThrough = new PassThrough();
+      
       const uploadStream = this.s3Client.upload({
         Bucket: bucket,
         Key: previewKey,
-        Body: sharpTransform, // Direct connection
+        Body: passThrough,
         ContentType: contentType,
         StorageClass: "STANDARD",
       });
 
-      // Direct pipe chain (most memory efficient)
+      // Note: AWS S3 upload stream only emits 'httpUploadProgress' events, errors are handled in promise
+
+      // Proper stream pipeline: download → sharp → passThrough → upload
       const downloadStream = this.s3Client
         .getObject({ Bucket: bucket, Key: processKey })
         .createReadStream();
 
-      downloadStream.pipe(sharpTransform); // Single pipe, no PassThrough
+      // Add stream debugging and error handling
+      downloadStream.on('error', (error) => {
+        this.logger.error(`❌ Download stream error for ${processKey}: ${error.message}`);
+      });
+
+      sharpTransform.on('error', (error) => {
+        this.logger.error(`❌ Sharp transform error for ${key}: ${error.message}`);
+      });
+
+      passThrough.on('error', (error) => {
+        this.logger.error(`❌ PassThrough stream error for ${previewKey}: ${error.message}`);
+      });
+
+      // Chain the streams correctly
+      downloadStream.pipe(sharpTransform).pipe(passThrough);
 
       const uploadResult = await uploadStream.promise();
 
