@@ -1,18 +1,9 @@
-FROM node:18-alpine
+# Multi-stage build for optimized production image
+FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Install system dependencies for comprehensive image format support
-# Core image processing libraries:
-# - vips-dev: libvips development files for Sharp
-# - libraw-dev: RAW image format support (ARW, CR2, NEF, DNG, etc.)
-# - dcraw: Popular RAW converter utility as fallback
-# - imagemagick: Additional image processing with RAW support
-# - libheif-dev: HEIC/HEIF format support
-# Build tools:
-# - build-base: Compiler tools needed for native modules
-# - python3: Required for node-gyp
-# - pkgconfig: For finding libraries during compilation
+# Install build dependencies and image processing libraries
 RUN apk add --no-cache \
     vips-dev \
     libraw-dev \
@@ -27,10 +18,8 @@ RUN apk add --no-cache \
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies and rebuild Sharp with system libvips
-# This ensures Sharp uses the system libvips with libraw support
-RUN npm ci --only=production && \
-    npm rebuild sharp --verbose
+# Install all dependencies (including dev dependencies for build)
+RUN npm ci
 
 # Copy source code
 COPY . .
@@ -38,12 +27,47 @@ COPY . .
 # Build the application
 RUN npm run build
 
-# Clean up build dependencies to reduce image size
-# Keep runtime libraries (vips, libraw, dcraw, imagemagick, libheif)
-RUN apk del build-base python3 py3-pip pkgconfig
+# Remove dev dependencies
+RUN npm prune --production
+
+# Rebuild Sharp with system libvips for optimal performance
+RUN npm rebuild sharp --verbose
+
+# Production stage
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install only runtime dependencies for image processing
+RUN apk add --no-cache \
+    vips \
+    libraw \
+    dcraw \
+    imagemagick \
+    libheif \
+    tini
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+
+# Copy built application and dependencies from builder
+COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nodejs:nodejs /app/package*.json ./
+
+# Switch to non-root user
+USER nodejs
 
 # Expose port
 EXPOSE 3001
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+
+# Use tini to handle signals properly
+ENTRYPOINT ["/sbin/tini", "--"]
+
 # Start the application
-CMD ["npm", "run", "start:prod"]
+CMD ["node", "dist/main"]
