@@ -4,16 +4,21 @@
   "description": "Image Processing Microservice for FotosfoLio",
   "main": "dist/main.js",
   "scripts": {
-    "build": "nest build",
+    "build": "node --max-old-space-size=4096 node_modules/@nestjs/cli/bin/nest.js build",
     "start": "nest start",
-    "start:dev": "nest start --watch",
-    "start:debug": "nest start --debug --watch",
+    "start:dev": "node --max-old-space-size=4096 node_modules/@nestjs/cli/bin/nest.js start --watch",
+    "start:debug": "node --max-old-space-size=4096 node_modules/@nestjs/cli/bin/nest.js start --debug --watch",
     "start:prod": "node dist/main"
   },
-  "keywords": ["image-processing", "microservice", "nestjs"],
+  "keywords": [
+    "image-processing",
+    "microservice",
+    "nestjs"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.901.0",
     "@nestjs/bullmq": "^11.0.3",
     "@nestjs/common": "^11.1.6",
     "@nestjs/config": "^4.0.2",
@@ -21,10 +26,16 @@
     "@nestjs/platform-express": "^11.1.6",
     "@nestjs/swagger": "^11.2.0",
     "@nestjs/typeorm": "^11.0.0",
+    "@types/aws-sdk": "^0.0.42",
+    "aws-sdk": "^2.1692.0",
     "bullmq": "^5.60.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
+    "file-type": "^21.0.0",
+    "heic-convert": "^2.1.0",
+    "heic-decode": "^2.1.0",
     "ioredis": "^5.8.0",
+    "node-fetch": "3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "sharp": "^0.34.4"
