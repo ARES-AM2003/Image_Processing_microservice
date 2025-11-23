@@ -20,7 +20,7 @@ export class ImageProcessor extends WorkerHost {
   private readonly logger = new Logger(ImageProcessor.name);
   private readonly s3Client: AWS.S3;
   private readonly memoryThreshold = Math.floor(os.totalmem() * 0.3); // 30% of total RAM
-  private readonly minFileSizeForProcessing = 5 * 1024 * 1024; // 5MB threshold
+  private readonly minFileSizeForProcessing = 1 * 1024 * 1024; // 5MB threshold
   private readonly maxPixels = 50 * 1024 * 1024; // 50MP limit for safety
   private processedCount = 0;
   private skippedCount = 0;
@@ -876,7 +876,7 @@ export class ImageProcessor extends WorkerHost {
 
       // Create PassThrough stream for proper pipeline
       const passThrough = new PassThrough();
-      
+
       const uploadStream = this.s3Client.upload({
         Bucket: bucket,
         Key: previewKey,
