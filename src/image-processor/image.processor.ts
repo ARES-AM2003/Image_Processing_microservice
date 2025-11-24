@@ -766,11 +766,11 @@ export class ImageProcessor extends WorkerHost {
       let previewKey: string;
       let processKey = key;
 
-      if (key.startsWith("Orginal")) {
+      if (key.startsWith("Orginal") || key.startsWith("Original")) {
         if (isPng || isWebp) {
-          previewKey = key.replace(/^Orginal/, "Preview");
+          previewKey = key.replace(/^(Orginal|Original)/, "Preview");
         } else {
-          previewKey = key.replace(/^Orginal/, "Preview").replace(/\.[^/.]+$/, ".jpg");
+          previewKey = key.replace(/^(Orginal|Original)/, "Preview").replace(/\.[^/.]+$/, ".jpg");
         }
       } else {
         if (isPng || isWebp) {
