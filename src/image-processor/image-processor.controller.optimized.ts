@@ -541,9 +541,7 @@ export class ImageProcessorController {
       };
     } catch (error) {
       const responseTime = Date.now() - startTime;
-      this.logger.error(
-        `S3 test failed for bucket ${bucket}: ${error.message}`,
-      );
+      this.logger.error(`S3 test failed: ${error.message}`);
 
       return {
         success: false,

@@ -115,17 +115,7 @@ export class ImageProcessor extends WorkerHost {
       },
     });
 
-    // Log S3 config for debugging (remove in production)
-    console.log("🔧 S3 Configuration:");
-    console.log("  Region:", process.env.S3_REGION || "NOT_SET");
-    console.log("  Endpoint:", process.env.S3_ENDPOINT || "NOT_SET");
-    console.log(
-      "  Access Key ID:",
-      process.env.S3_ACCESS_KEY ? "SET" : "NOT_SET",
-    );
-    console.log("  Secret Key:", process.env.S3_SECRET_KEY ? "SET" : "NOT_SET");
-    console.log("  Force Path Style:", true);
-    console.log("  Signature Version:", "v4");
+    // S3 Configuration loaded
   }
 
   /**
@@ -142,7 +132,7 @@ export class ImageProcessor extends WorkerHost {
 
       // Minimal logging for production
       if (!isImage) {
-        console.log(`⏭️  Non-image: ${contentType} for ${key}`);
+        console.log(`⏭️  Non-image file detected`);
       }
 
       return isImage;
@@ -166,16 +156,16 @@ export class ImageProcessor extends WorkerHost {
    */
   async testHeicConversion(bucket: string, key: string): Promise<any> {
     try {
-      console.log(`🧪 Testing HEIC/HEIF conversion for ${key}...`);
+      console.log(`🧪 Testing HEIC/HEIF conversion...`);
 
       if (!this.isHeicFormat(key)) {
-        throw new Error(`File ${key} is not a HEIC/HEIF format`);
+        throw new Error(`File is not a HEIC/HEIF format`);
       }
 
       // Validate the HEIC/HEIF file
       const isValid = await this.validateHeicContent(bucket, key);
       if (!isValid) {
-        throw new Error(`Invalid HEIC/HEIF file: ${key}`);
+        throw new Error(`Invalid HEIC/HEIF file`);
       }
 
       // Convert to WebP
@@ -184,12 +174,10 @@ export class ImageProcessor extends WorkerHost {
       // Verify the converted file exists
       const webpExists = await this.fileExists(bucket, webpKey);
       if (!webpExists) {
-        throw new Error(`Converted WebP file not found: ${webpKey}`);
+        throw new Error(`Converted WebP file not found`);
       }
 
-      console.log(
-        `✅ HEIC/HEIF conversion test passed for ${key} → ${webpKey}`,
-      );
+      console.log(`✅ HEIC/HEIF conversion test passed`);
 
       return {
         success: true,
@@ -198,10 +186,7 @@ export class ImageProcessor extends WorkerHost {
         message: "HEIC/HEIF conversion test completed successfully",
       };
     } catch (error) {
-      console.error(
-        `❌ HEIC/HEIF conversion test failed for ${key}:`,
-        error.message,
-      );
+      console.error(`❌ HEIC/HEIF conversion test failed:`, error.message);
       return {
         success: false,
         originalKey: key,
@@ -235,7 +220,7 @@ export class ImageProcessor extends WorkerHost {
     key: string,
   ): Promise<boolean> {
     try {
-      console.log(`🔍 Validating HEIC/HEIF format for ${key}...`);
+      console.log(`🔍 Validating HEIC/HEIF format...`);
 
       // Get object as buffer for libheif validation
       const s3Object = await this.s3Client
@@ -245,7 +230,7 @@ export class ImageProcessor extends WorkerHost {
       const inputBuffer = s3Object.Body as Buffer;
 
       if (!inputBuffer || inputBuffer.length === 0) {
-        console.warn(`❌ Empty buffer for HEIC/HEIF file ${key}`);
+        console.warn(`❌ Empty buffer for HEIC/HEIF file`);
         return false;
       }
 
@@ -288,10 +273,8 @@ export class ImageProcessor extends WorkerHost {
     } catch (error) {
       // Check if it's a "file not found" error
       if (error.code === "NoSuchKey" || error.statusCode === 404) {
-        console.error(
-          `❌ HEIC/HEIF file not found in S3 bucket '${bucket}': ${key}`,
-        );
-        throw new Error(`HEIC/HEIF file not found in S3: ${bucket}/${key}`);
+        console.error(`❌ HEIC/HEIF file not found in S3`);
+        throw new Error(`HEIC/HEIF file not found in S3`);
       }
 
       // Check if it's a corruption error that we should skip gracefully
@@ -304,15 +287,13 @@ export class ImageProcessor extends WorkerHost {
         errorMessage.includes("compression format has not been built in")
       ) {
         console.warn(
-          `⚠️  HEIC/HEIF file appears corrupted or unsupported, skipping: ${key}`,
+          `⚠️  HEIC/HEIF file appears corrupted or unsupported, skipping`,
         );
         console.warn(`   Corruption details: ${errorMessage}`);
         return false;
       }
 
-      console.warn(
-        `❌ HEIC/HEIF validation failed for ${key}: ${error.message}`,
-      );
+      console.warn(`❌ HEIC/HEIF validation failed: ${error.message}`);
       console.warn(`   Error code: ${error.code || "unknown"}`);
       console.warn(`   Error stack: ${error.stack?.split("\n")[0] || "N/A"}`);
       return false;
@@ -384,29 +365,27 @@ export class ImageProcessor extends WorkerHost {
       const metadata = await sharp(s3Object.Body as Buffer).metadata();
 
       if (metadata.format !== undefined) {
-        console.log(`✅ Validated ${key} as ${metadata.format} format`);
+        console.log(`✅ Validated as ${metadata.format} format`);
         return true;
       } else {
-        console.warn(`⚠️  Could not determine format for ${key}`);
+        console.warn(`⚠️  Could not determine format`);
         return false;
       }
     } catch (error) {
       // Check if it's a "file not found" error
       if (error.code === "NoSuchKey" || error.statusCode === 404) {
-        console.error(`❌ File not found in S3 bucket '${bucket}': ${key}`);
-        throw new Error(`File not found in S3: ${bucket}/${key}`);
+        console.error(`❌ File not found in S3`);
+        throw new Error(`File not found in S3`);
       }
 
       if (isRawFormat) {
         console.warn(
-          `⚠️  RAW format validation failed for ${key}: ${error.message}. This may indicate missing RAW codec support.`,
+          `⚠️  RAW format validation failed. This may indicate missing RAW codec support.`,
         );
         // For RAW formats, we're more permissive as they may not be fully supported
         return true;
       } else {
-        console.warn(
-          `❌ Failed to validate image content for ${key}: ${error.message}`,
-        );
+        console.warn(`❌ Failed to validate image content: ${error.message}`);
         // For standard formats, fall back to extension check
         return true;
       }
@@ -429,11 +408,11 @@ export class ImageProcessor extends WorkerHost {
     } catch (error) {
       // Check if it's a "file not found" error
       if (error.code === "NoSuchKey" || error.statusCode === 404) {
-        console.error(`❌ File not found in S3 bucket '${bucket}': ${key}`);
-        throw new Error(`File not found in S3: ${bucket}/${key}`);
+        console.error(`❌ File not found in S3`);
+        throw new Error(`File not found in S3`);
       }
 
-      console.error(`❌ Error getting file size for ${key}:`, {
+      console.error(`❌ Error getting file size:`, {
         code: error.code,
         statusCode: error.statusCode,
         message: error.message,
@@ -454,9 +433,7 @@ export class ImageProcessor extends WorkerHost {
     const startTime = Date.now();
 
     try {
-      console.log(
-        `🔄 Converting HEIC/HEIF ${key} to WebP format using libheif-js...`,
-      );
+      console.log(`🔄 Converting HEIC/HEIF to WebP format using libheif-js...`);
 
       // Get the HEIC/HEIF file from S3
       const s3Object = await this.s3Client
@@ -476,9 +453,7 @@ export class ImageProcessor extends WorkerHost {
 
       try {
         // Try heic-decode first
-        console.log(
-          `⚙️  Starting HEIC/HEIF conversion with heic-decode for ${key}...`,
-        );
+        console.log(`⚙️  Starting HEIC/HEIF conversion with heic-decode...`);
 
         // Decode the HEIC/HEIF image
         const { width, height, data } = await decode({ buffer: inputBuffer });
@@ -512,9 +487,7 @@ export class ImageProcessor extends WorkerHost {
           })
           .toBuffer();
       } catch (heicDecodeError) {
-        console.warn(
-          `⚠️  heic-decode failed for ${key}: ${heicDecodeError.message}`,
-        );
+        console.warn(`⚠️  heic-decode failed: ${heicDecodeError.message}`);
         console.log(`🔄 Falling back to Sharp for HEIC conversion...`);
 
         try {
@@ -539,7 +512,7 @@ export class ImageProcessor extends WorkerHost {
             })
             .toBuffer();
         } catch (sharpError) {
-          console.error(`❌ Both heic-decode and Sharp failed for ${key}`);
+          console.error(`❌ Both heic-decode and Sharp failed`);
           console.error(`   heic-decode error: ${heicDecodeError.message}`);
           console.error(`   Sharp error: ${sharpError.message}`);
           throw new Error(
@@ -561,7 +534,7 @@ export class ImageProcessor extends WorkerHost {
       );
 
       // Upload the converted WebP to S3
-      console.log(`📤 Uploading converted WebP ${webpKey} to S3...`);
+      console.log(`📤 Uploading converted WebP to S3...`);
       await this.s3Client
         .upload({
           Bucket: bucket,
@@ -573,9 +546,7 @@ export class ImageProcessor extends WorkerHost {
         .promise();
 
       const conversionTime = Date.now() - startTime;
-      console.log(
-        `✅ Converted HEIC/HEIF ${key} to ${webpKey} in ${conversionTime}ms`,
-      );
+      console.log(`✅ Converted HEIC/HEIF to WebP in ${conversionTime}ms`);
       console.log(
         `   Final result: ${inputSizeMB.toFixed(2)}MB → ${outputSizeMB.toFixed(2)}MB (${compressionRatio}% reduction)`,
       );
@@ -584,7 +555,7 @@ export class ImageProcessor extends WorkerHost {
     } catch (error) {
       const conversionTime = Date.now() - startTime;
       console.error(
-        `❌ Failed to convert HEIC/HEIF ${key} to WebP after ${conversionTime}ms:`,
+        `❌ Failed to convert HEIC/HEIF to WebP after ${conversionTime}ms:`,
         error.message,
       );
       console.error(`   Error code: ${error.code || "unknown"}`);
@@ -608,7 +579,7 @@ export class ImageProcessor extends WorkerHost {
         errorMessage.includes("Both HEIC conversion methods failed")
       ) {
         console.warn(
-          `⚠️  HEIC/HEIF file appears corrupted or unsupported, marking as skipped: ${key}`,
+          `⚠️  HEIC/HEIF file appears corrupted or unsupported, marking as skipped`,
         );
         // Return a special error that indicates this should be skipped, not failed
         throw new Error(`HEIC_CORRUPTED: ${errorMessage}`);
@@ -703,22 +674,18 @@ export class ImageProcessor extends WorkerHost {
       // Step 1: Check if file exists in S3
       const exists = await this.fileExists(bucket, key);
       if (!exists) {
-        console.error(
-          `❌ Skipping ${key} - File does not exist in S3 bucket '${bucket}'`,
-        );
+        console.error(`❌ Skipping - File does not exist in S3`);
         this.skippedCount++;
         console.log(
           `📊 Current Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
         );
-        throw new Error(`File not found in S3 bucket '${bucket}': ${key}`);
+        throw new Error(`File not found in S3`);
       }
 
       // Step 2: Check if file is an image by content type
       const isImage = await this.isImageFile(bucket, key);
       if (!isImage) {
-        console.log(
-          `⏭️  Skipping ${key} - Not an image file (content type check)`,
-        );
+        console.log(`⏭️  Skipping - Not an image file (content type check)`);
         this.skippedCount++;
         console.log(
           `📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
@@ -733,9 +700,7 @@ export class ImageProcessor extends WorkerHost {
       // Step 3: Validate actual image content
       const isValidImage = await this.validateImageContent(bucket, key);
       if (!isValidImage) {
-        console.log(
-          `⏭️  Skipping ${key} - Not a valid image file (content check)`,
-        );
+        console.log(`⏭️  Skipping - Not a valid image file (content check)`);
         this.skippedCount++;
         console.log(
           `📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
@@ -755,7 +720,7 @@ export class ImageProcessor extends WorkerHost {
 
       if (fileSize < this.minFileSizeForProcessing) {
         console.log(
-          `⏭️  Skipping ${key} - File size (${fileSizeMB.toFixed(2)} MB) is less than 5MB`,
+          `⏭️  Skipping - File size (${fileSizeMB.toFixed(2)} MB) is less than 5MB`,
         );
         this.skippedCount++;
         console.log(
@@ -780,7 +745,7 @@ export class ImageProcessor extends WorkerHost {
       // Skip RAW files - they are not supported for processing
       if (isRaw) {
         console.log(
-          `⏭️  Skipping ${key} - RAW format files are not supported for preview generation`,
+          `⏭️  Skipping - RAW format files are not supported for preview generation`,
         );
         this.skippedCount++;
         console.log(
@@ -817,12 +782,12 @@ export class ImageProcessor extends WorkerHost {
       // For HEIC files, we need to convert first (using heic-decode library)
       if (isHeic) {
         try {
-          console.log(`🔄 Converting HEIC file ${key} to WebP...`);
+          console.log(`🔄 Converting HEIC file to WebP...`);
           processKey = await this.convertHeicToWebp(bucket, key);
-          console.log(`✅ HEIC converted to ${processKey}`);
+          console.log(`✅ HEIC converted successfully`);
         } catch (conversionError) {
           if (conversionError.message?.startsWith("HEIC_CORRUPTED:")) {
-            console.log(`⏭️  Skipping corrupted HEIC/HEIF file: ${key}`);
+            console.log(`⏭️  Skipping corrupted HEIC/HEIF file`);
             this.skippedCount++;
             console.log(
               `📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
@@ -839,7 +804,7 @@ export class ImageProcessor extends WorkerHost {
       }
 
       console.log(
-        `📸 Processing: ${key} → ${previewKey} (Start: ${Math.round(startMemory.heapUsed / 1024 / 1024)}MB)`,
+        `📸 Processing image (Start: ${Math.round(startMemory.heapUsed / 1024 / 1024)}MB)`,
       );
 
       // Production Sharp transform with aggressive optimization
@@ -863,7 +828,7 @@ export class ImageProcessor extends WorkerHost {
       let outputFormat: string;
 
       if (isPng) {
-        console.log(`📦 Compressing PNG (quality 80, level 9)`);
+        console.log(`📦 Compressing PNG`);
         sharpTransform = sharpTransform.png({
           quality: 80,
           compressionLevel: 9, // Maximum compression
@@ -875,11 +840,11 @@ export class ImageProcessor extends WorkerHost {
       } else {
         // Convert all formats to WebP for optimal compression and progressive loading
         if (isWebp) {
-          console.log(`📦 Compressing WebP (quality 70, effort 6)`);
+          console.log(`📦 Compressing WebP`);
         } else if (!isJpeg && !isHeic) {
-          console.log(`🔄 Converting ${fileExtension} to WebP (quality 70)...`);
+          console.log(`🔄 Converting to WebP...`);
         } else {
-          console.log(`🔄 Converting to WebP (quality 70, progressive)`);
+          console.log(`🔄 Converting to WebP`);
         }
         sharpTransform = sharpTransform.webp({
           quality: 70, // Matches JPEG 70 visual quality with 30% smaller file size
@@ -896,9 +861,7 @@ export class ImageProcessor extends WorkerHost {
       }
 
       // Log upload parameters for debugging
-      this.logger.log(
-        `📤 Starting upload: Bucket=${bucket}, Key=${previewKey}, ContentType=${contentType}`,
-      );
+      this.logger.log(`📤 Starting main preview upload`);
 
       // Create PassThrough stream for proper pipeline
       const passThrough = new PassThrough();
@@ -920,21 +883,15 @@ export class ImageProcessor extends WorkerHost {
 
       // Add stream debugging and error handling
       downloadStream.on("error", (error) => {
-        this.logger.error(
-          `❌ Download stream error for ${processKey}: ${error.message}`,
-        );
+        this.logger.error(`❌ Download stream error: ${error.message}`);
       });
 
       sharpTransform.on("error", (error) => {
-        this.logger.error(
-          `❌ Sharp transform error for ${key}: ${error.message}`,
-        );
+        this.logger.error(`❌ Sharp transform error: ${error.message}`);
       });
 
       passThrough.on("error", (error) => {
-        this.logger.error(
-          `❌ PassThrough stream error for ${previewKey}: ${error.message}`,
-        );
+        this.logger.error(`❌ PassThrough stream error: ${error.message}`);
       });
 
       // Chain the streams correctly
@@ -943,19 +900,17 @@ export class ImageProcessor extends WorkerHost {
       const uploadResult = await uploadStream.promise();
 
       // Log upload result details for debugging
-      this.logger.log(
-        `📤 Upload successful: ${previewKey} → ETag: ${uploadResult.ETag}, Location: ${uploadResult.Location}`,
-      );
+      this.logger.log(`📤 Upload successful`);
 
       // Verify the file was actually uploaded by checking if it exists
       try {
         await this.s3Client
           .headObject({ Bucket: bucket, Key: previewKey })
           .promise();
-        this.logger.log(`✅ Verified: ${previewKey} exists in S3`);
+        this.logger.log(`✅ Verified: File exists in S3`);
       } catch (verifyError) {
         this.logger.error(
-          `❌ Upload verification failed for ${previewKey}: ${verifyError.message}`,
+          `❌ Upload verification failed: ${verifyError.message}`,
         );
         throw new Error(`Upload verification failed: ${verifyError.message}`);
       }
@@ -968,7 +923,7 @@ export class ImageProcessor extends WorkerHost {
       );
 
       this.logger.log(
-        `✅ Completed: ${key} in ${processingTime}ms (Memory: +${memoryDelta}MB)`,
+        `✅ Completed in ${processingTime}ms (Memory: +${memoryDelta}MB)`,
       );
 
       return { previewKey: previewKey };

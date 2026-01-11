@@ -33,7 +33,7 @@ export class ImageProcessorService {
   }
 
   async addImageJob(bucket: string, key: string) {
-    this.logger.log(`Adding image job for bucket '${bucket}': ${key}`);
+    this.logger.log(`Adding image job`);
     return this.queue.add(
       "generate-preview",
       { bucket, key },
@@ -55,7 +55,7 @@ export class ImageProcessorService {
 
     // Skip logging for very large batches to avoid overhead
     if (keys.length < 1000) {
-      this.logger.log(`📦 Enqueue ${keys.length} keys for '${bucket}'`);
+      this.logger.log(`📦 Enqueue ${keys.length} keys`);
     }
 
     // Use single bulk operation for all sizes - much faster
@@ -92,9 +92,7 @@ export class ImageProcessorService {
   }
 
   async testHeicConversion(bucket: string, key: string) {
-    this.logger.log(
-      `Testing HEIC/HEIF conversion for bucket '${bucket}': ${key}`,
-    );
+    this.logger.log(`Testing HEIC/HEIF conversion`);
     return this.queue.add(
       "test-heic-conversion",
       { bucket, key },
@@ -121,25 +119,30 @@ export class ImageProcessorService {
 
     this.logger.log(
       `📊 Before: ${beforeCounts.waiting} waiting, ${beforeCounts.active} active, ` +
-      `${beforeCounts.completed} completed, ${beforeCounts.failed} failed, ${beforeCounts.delayed} delayed`
+        `${beforeCounts.completed} completed, ${beforeCounts.failed} failed, ${beforeCounts.delayed} delayed`,
     );
 
     // Get all active jobs and fail them immediately
     const activeJobs = await this.queue.getActive();
     this.logger.log(`🛑 Stopping ${activeJobs.length} active jobs...`);
-    
+
     for (const job of activeJobs) {
       try {
-        await job.moveToFailed(new Error("Job cancelled by clear queue operation"), "0");
+        await job.moveToFailed(
+          new Error("Job cancelled by clear queue operation"),
+          "0",
+        );
         this.logger.debug(`  ❌ Stopped job ${job.id}`);
       } catch (error) {
-        this.logger.warn(`  ⚠️  Could not stop job ${job.id}: ${error.message}`);
+        this.logger.warn(
+          `  ⚠️  Could not stop job ${job.id}: ${error.message}`,
+        );
       }
     }
 
     // Drain waiting and delayed jobs
     await this.queue.drain();
-    
+
     // Clean up all job types with increased limits
     await this.queue.clean(0, 10000, "completed");
     await this.queue.clean(0, 10000, "failed");
@@ -158,19 +161,20 @@ export class ImageProcessorService {
     };
 
     const clearTime = Date.now() - startTime;
-    const totalRemoved = 
-      (beforeCounts.waiting - afterCounts.waiting) +
+    const totalRemoved =
+      beforeCounts.waiting -
+      afterCounts.waiting +
       (beforeCounts.active - afterCounts.active) +
       (beforeCounts.completed - afterCounts.completed) +
       (beforeCounts.failed - afterCounts.failed) +
       (beforeCounts.delayed - afterCounts.delayed);
 
     this.logger.log(
-      `✅ Queue cleared in ${clearTime}ms - Removed ${totalRemoved} jobs`
+      `✅ Queue cleared in ${clearTime}ms - Removed ${totalRemoved} jobs`,
     );
     this.logger.log(
       `📊 After: ${afterCounts.waiting} waiting, ${afterCounts.active} active, ` +
-      `${afterCounts.completed} completed, ${afterCounts.failed} failed, ${afterCounts.delayed} delayed`
+        `${afterCounts.completed} completed, ${afterCounts.failed} failed, ${afterCounts.delayed} delayed`,
     );
 
     return {
