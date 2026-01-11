@@ -178,23 +178,23 @@ export class ImageProcessor extends WorkerHost {
         throw new Error(`Invalid HEIC/HEIF file: ${key}`);
       }
 
-      // Convert to JPEG
-      const jpegKey = await this.convertHeicToJpeg(bucket, key);
+      // Convert to WebP
+      const webpKey = await this.convertHeicToWebp(bucket, key);
 
       // Verify the converted file exists
-      const jpegExists = await this.fileExists(bucket, jpegKey);
-      if (!jpegExists) {
-        throw new Error(`Converted JPEG file not found: ${jpegKey}`);
+      const webpExists = await this.fileExists(bucket, webpKey);
+      if (!webpExists) {
+        throw new Error(`Converted WebP file not found: ${webpKey}`);
       }
 
       console.log(
-        `✅ HEIC/HEIF conversion test passed for ${key} → ${jpegKey}`,
+        `✅ HEIC/HEIF conversion test passed for ${key} → ${webpKey}`,
       );
 
       return {
         success: true,
         originalKey: key,
-        convertedKey: jpegKey,
+        convertedKey: webpKey,
         message: "HEIC/HEIF conversion test completed successfully",
       };
     } catch (error) {
@@ -444,18 +444,18 @@ export class ImageProcessor extends WorkerHost {
   }
 
   /**
-   * Convert HEIC/HEIF image to JPEG using heic-decode with Sharp fallback
+   * Convert HEIC/HEIF image to WebP using heic-decode with Sharp fallback
    */
-  private async convertHeicToJpeg(
+  private async convertHeicToWebp(
     bucket: string,
     key: string,
   ): Promise<string> {
-    const jpegKey = key.replace(/\.(heic|heif)$/i, ".jpg");
+    const webpKey = key.replace(/\.(heic|heif)$/i, ".webp");
     const startTime = Date.now();
 
     try {
       console.log(
-        `🔄 Converting HEIC/HEIF ${key} to JPEG format using libheif-js...`,
+        `🔄 Converting HEIC/HEIF ${key} to WebP format using libheif-js...`,
       );
 
       // Get the HEIC/HEIF file from S3
@@ -504,10 +504,10 @@ export class ImageProcessor extends WorkerHost {
             withoutEnlargement: true,
             kernel: sharp.kernel.lanczos3,
           })
-          .jpeg({
-            quality: 70,
-            progressive: true, // Progressive JPEG for better loading experience
-            mozjpeg: true,
+          .webp({
+            quality: 70, // Matches JPEG 70 visual quality with 30% smaller file size
+            effort: 6, // Maximum compression effort (automatic progressive loading)
+            smartSubsample: true, // Better quality preservation
             force: true,
           })
           .toBuffer();
@@ -531,10 +531,10 @@ export class ImageProcessor extends WorkerHost {
               withoutEnlargement: true,
               kernel: sharp.kernel.lanczos3,
             })
-            .jpeg({
+            .webp({
               quality: 70,
-              progressive: true,
-              mozjpeg: true,
+              effort: 6,
+              smartSubsample: true,
               force: true,
             })
             .toBuffer();
@@ -555,36 +555,36 @@ export class ImageProcessor extends WorkerHost {
       ).toFixed(1);
       const sizeReduction = (inputSizeMB - outputSizeMB).toFixed(2);
 
-      console.log(`📏 Output JPEG size: ${outputSizeMB.toFixed(2)} MB`);
+      console.log(`📏 Output WebP size: ${outputSizeMB.toFixed(2)} MB`);
       console.log(
         `📊 Size reduction: ${sizeReduction}MB (${compressionRatio}% smaller)`,
       );
 
-      // Upload the converted JPEG to S3
-      console.log(`📤 Uploading converted JPEG ${jpegKey} to S3...`);
+      // Upload the converted WebP to S3
+      console.log(`📤 Uploading converted WebP ${webpKey} to S3...`);
       await this.s3Client
         .upload({
           Bucket: bucket,
-          Key: jpegKey,
+          Key: webpKey,
           Body: outputBuffer,
-          ContentType: "image/jpeg",
+          ContentType: "image/webp",
           StorageClass: "STANDARD",
         })
         .promise();
 
       const conversionTime = Date.now() - startTime;
       console.log(
-        `✅ Converted HEIC/HEIF ${key} to ${jpegKey} in ${conversionTime}ms`,
+        `✅ Converted HEIC/HEIF ${key} to ${webpKey} in ${conversionTime}ms`,
       );
       console.log(
         `   Final result: ${inputSizeMB.toFixed(2)}MB → ${outputSizeMB.toFixed(2)}MB (${compressionRatio}% reduction)`,
       );
 
-      return jpegKey;
+      return webpKey;
     } catch (error) {
       const conversionTime = Date.now() - startTime;
       console.error(
-        `❌ Failed to convert HEIC/HEIF ${key} to JPEG after ${conversionTime}ms:`,
+        `❌ Failed to convert HEIC/HEIF ${key} to WebP after ${conversionTime}ms:`,
         error.message,
       );
       console.error(`   Error code: ${error.code || "unknown"}`);
@@ -817,8 +817,8 @@ export class ImageProcessor extends WorkerHost {
       // For HEIC files, we need to convert first (using heic-decode library)
       if (isHeic) {
         try {
-          console.log(`🔄 Converting HEIC file ${key} to JPEG...`);
-          processKey = await this.convertHeicToJpeg(bucket, key);
+          console.log(`🔄 Converting HEIC file ${key} to WebP...`);
+          processKey = await this.convertHeicToWebp(bucket, key);
           console.log(`✅ HEIC converted to ${processKey}`);
         } catch (conversionError) {
           if (conversionError.message?.startsWith("HEIC_CORRUPTED:")) {
@@ -872,33 +872,27 @@ export class ImageProcessor extends WorkerHost {
         });
         contentType = "image/png";
         outputFormat = "png";
-      } else if (isWebp) {
-        console.log(`📦 Compressing WebP (quality 75, effort 6)`);
+      } else {
+        // Convert all formats to WebP for optimal compression and progressive loading
+        if (isWebp) {
+          console.log(`📦 Compressing WebP (quality 70, effort 6)`);
+        } else if (!isJpeg && !isHeic) {
+          console.log(`🔄 Converting ${fileExtension} to WebP (quality 70)...`);
+        } else {
+          console.log(`🔄 Converting to WebP (quality 70, progressive)`);
+        }
         sharpTransform = sharpTransform.webp({
-          quality: 75,
-          effort: 6, // Higher effort for better compression
+          quality: 70, // Matches JPEG 70 visual quality with 30% smaller file size
+          effort: 6, // Maximum compression effort (automatic progressive loading)
+          smartSubsample: true, // Better quality preservation
           force: true,
         });
         contentType = "image/webp";
         outputFormat = "webp";
-      } else {
-        // Convert and compress to JPEG for all other formats (HEIC, TIFF, etc.)
-        if (!isJpeg && !isHeic) {
-          console.log(
-            `🔄 Converting ${fileExtension} to JPEG and compressing...`,
-          );
-        } else {
-          console.log(`📦 Compressing JPEG (quality 65, mozjpeg)`);
+        // Update preview key to .webp extension for non-webp files
+        if (!isWebp && !isPng) {
+          previewKey = previewKey.replace(/\.(jpg|jpeg)$/i, ".webp");
         }
-        sharpTransform = sharpTransform.jpeg({
-          quality: 65, // Aggressive compression for production
-          progressive: true, // Progressive JPEG for better loading experience
-          mozjpeg: true,
-          optimizeScans: true,
-          force: true,
-        });
-        contentType = "image/jpeg";
-        outputFormat = "jpeg";
       }
 
       // Log upload parameters for debugging

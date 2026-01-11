@@ -27,15 +27,16 @@ export class ProcessingResultDto {
   originalKey?: string;
 
   @ApiProperty({
-    description: "Key of the file that was actually processed (after JPEG conversion if needed)",
-    example: "Orginal/photos/IMG_001.jpg",
+    description:
+      "Key of the file that was actually processed (after WebP conversion if needed)",
+    example: "Orginal/photos/IMG_001.webp",
     required: false,
   })
   processedKey?: string;
 
   @ApiProperty({
     description: "Key of the generated preview/processed image",
-    example: "Preview/photos/IMG_001.jpg",
+    example: "Preview/photos/IMG_001.webp",
     required: false,
   })
   previewKey?: string;
@@ -62,11 +63,11 @@ export class ProcessingResultDto {
   originalFileSize?: number;
 
   @ApiProperty({
-    description: "Whether the file was converted to JPEG before processing",
+    description: "Whether the file was converted to WebP before processing",
     example: true,
     required: false,
   })
-  convertedToJpeg?: boolean;
+  convertedToWebp?: boolean;
 
   @ApiProperty({
     description: "File type detected from extension",
