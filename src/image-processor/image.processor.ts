@@ -506,7 +506,7 @@ export class ImageProcessor extends WorkerHost {
           })
           .jpeg({
             quality: 70,
-            progressive: false, // Faster encoding
+            progressive: true, // Progressive JPEG for better loading experience
             mozjpeg: true,
             force: true,
           })
@@ -533,7 +533,7 @@ export class ImageProcessor extends WorkerHost {
             })
             .jpeg({
               quality: 70,
-              progressive: false,
+              progressive: true,
               mozjpeg: true,
               force: true,
             })
@@ -624,10 +624,42 @@ export class ImageProcessor extends WorkerHost {
   private isRawFormat(key: string): boolean {
     const extension = key.split(".").pop()?.toLowerCase();
     const rawFormats = [
-      "raw", "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "pef",
-      "srw", "raf", "3fr", "fff", "dcr", "kdc", "srf", "x3f", "mef",
-      "mos", "mrw", "nrw", "rw1", "rwl", "iiq", "k25", "crw", "erf",
-      "sr2", "rwz", "bay", "cap", "eip", "dcs", "ptx", "pcd", "fpx"
+      "raw",
+      "cr2",
+      "cr3",
+      "nef",
+      "arw",
+      "dng",
+      "orf",
+      "rw2",
+      "pef",
+      "srw",
+      "raf",
+      "3fr",
+      "fff",
+      "dcr",
+      "kdc",
+      "srf",
+      "x3f",
+      "mef",
+      "mos",
+      "mrw",
+      "nrw",
+      "rw1",
+      "rwl",
+      "iiq",
+      "k25",
+      "crw",
+      "erf",
+      "sr2",
+      "rwz",
+      "bay",
+      "cap",
+      "eip",
+      "dcs",
+      "ptx",
+      "pcd",
+      "fpx",
     ];
     return extension ? rawFormats.includes(extension) : false;
   }
@@ -635,7 +667,6 @@ export class ImageProcessor extends WorkerHost {
   /**
    * Convert image to JPEG format if it's not already JPEG
    */
-
 
   async process(job: Job): Promise<any> {
     const jobName = job.name;
@@ -770,7 +801,9 @@ export class ImageProcessor extends WorkerHost {
         if (isPng || isWebp) {
           previewKey = key.replace(/^(Orginal|Original)/, "Preview");
         } else {
-          previewKey = key.replace(/^(Orginal|Original)/, "Preview").replace(/\.[^/.]+$/, ".jpg");
+          previewKey = key
+            .replace(/^(Orginal|Original)/, "Preview")
+            .replace(/\.[^/.]+$/, ".jpg");
         }
       } else {
         if (isPng || isWebp) {
@@ -805,8 +838,6 @@ export class ImageProcessor extends WorkerHost {
         }
       }
 
-
-
       console.log(
         `📸 Processing: ${key} → ${previewKey} (Start: ${Math.round(startMemory.heapUsed / 1024 / 1024)}MB)`,
       );
@@ -818,15 +849,14 @@ export class ImageProcessor extends WorkerHost {
         limitInputPixels: this.maxPixels,
         sequentialRead: true,
         pages: 1, // Only process first page/frame
-      })
-        .resize({
-          width: 1920,
-          height: 1920,
-          fit: "inside",
-          withoutEnlargement: true,
-          kernel: sharp.kernel.lanczos3,
-          fastShrinkOnLoad: true,
-        });
+      }).resize({
+        width: 1920,
+        height: 1920,
+        fit: "inside",
+        withoutEnlargement: true,
+        kernel: sharp.kernel.lanczos3,
+        fastShrinkOnLoad: true,
+      });
 
       // Apply format-specific compression
       let contentType: string;
@@ -854,13 +884,15 @@ export class ImageProcessor extends WorkerHost {
       } else {
         // Convert and compress to JPEG for all other formats (HEIC, TIFF, etc.)
         if (!isJpeg && !isHeic) {
-          console.log(`🔄 Converting ${fileExtension} to JPEG and compressing...`);
+          console.log(
+            `🔄 Converting ${fileExtension} to JPEG and compressing...`,
+          );
         } else {
           console.log(`📦 Compressing JPEG (quality 65, mozjpeg)`);
         }
         sharpTransform = sharpTransform.jpeg({
           quality: 65, // Aggressive compression for production
-          progressive: false, // Faster encoding
+          progressive: true, // Progressive JPEG for better loading experience
           mozjpeg: true,
           optimizeScans: true,
           force: true,
@@ -893,16 +925,22 @@ export class ImageProcessor extends WorkerHost {
         .createReadStream();
 
       // Add stream debugging and error handling
-      downloadStream.on('error', (error) => {
-        this.logger.error(`❌ Download stream error for ${processKey}: ${error.message}`);
+      downloadStream.on("error", (error) => {
+        this.logger.error(
+          `❌ Download stream error for ${processKey}: ${error.message}`,
+        );
       });
 
-      sharpTransform.on('error', (error) => {
-        this.logger.error(`❌ Sharp transform error for ${key}: ${error.message}`);
+      sharpTransform.on("error", (error) => {
+        this.logger.error(
+          `❌ Sharp transform error for ${key}: ${error.message}`,
+        );
       });
 
-      passThrough.on('error', (error) => {
-        this.logger.error(`❌ PassThrough stream error for ${previewKey}: ${error.message}`);
+      passThrough.on("error", (error) => {
+        this.logger.error(
+          `❌ PassThrough stream error for ${previewKey}: ${error.message}`,
+        );
       });
 
       // Chain the streams correctly
@@ -917,10 +955,14 @@ export class ImageProcessor extends WorkerHost {
 
       // Verify the file was actually uploaded by checking if it exists
       try {
-        await this.s3Client.headObject({ Bucket: bucket, Key: previewKey }).promise();
+        await this.s3Client
+          .headObject({ Bucket: bucket, Key: previewKey })
+          .promise();
         this.logger.log(`✅ Verified: ${previewKey} exists in S3`);
       } catch (verifyError) {
-        this.logger.error(`❌ Upload verification failed for ${previewKey}: ${verifyError.message}`);
+        this.logger.error(
+          `❌ Upload verification failed for ${previewKey}: ${verifyError.message}`,
+        );
         throw new Error(`Upload verification failed: ${verifyError.message}`);
       }
 
@@ -951,7 +993,7 @@ export class ImageProcessor extends WorkerHost {
 
   private async simulateImageProcessing(key: string): Promise<void> {
     // Simulate image processing delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // In a real implementation, you would:
     /*
