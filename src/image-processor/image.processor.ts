@@ -20,7 +20,7 @@ export class ImageProcessor extends WorkerHost {
   private readonly logger = new Logger(ImageProcessor.name);
   private readonly s3Client: AWS.S3;
   private readonly memoryThreshold = Math.floor(os.totalmem() * 0.3); // 30% of total RAM
-  private readonly minFileSizeForProcessing = 1 * 1024 * 1024; // 5MB threshold
+
   private readonly maxPixels = 50 * 1024 * 1024; // 50MP limit for safety
   private processedCount = 0;
   private skippedCount = 0;
@@ -712,29 +712,7 @@ export class ImageProcessor extends WorkerHost {
         };
       }
 
-      // Step 4: Check file size
-      const fileSize = await this.getFileSize(bucket, key);
-      const fileSizeMB = fileSize / (1024 * 1024);
-
-      console.log(`📏 File size: ${fileSizeMB.toFixed(2)} MB`);
-
-      if (fileSize < this.minFileSizeForProcessing) {
-        console.log(
-          `⏭️  Skipping - File size (${fileSizeMB.toFixed(2)} MB) is less than 5MB`,
-        );
-        this.skippedCount++;
-        console.log(
-          `📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
-        );
-        return {
-          skipped: true,
-          reason: "File size less than 5MB",
-          fileSize: fileSizeMB,
-          threshold: 5,
-        };
-      }
-
-      // Step 5: Determine output format and preview key
+      // Step 4: Determine output format and preview key
       const fileExtension = key.split(".").pop()?.toLowerCase();
       const isPng = fileExtension === "png";
       const isWebp = fileExtension === "webp";
