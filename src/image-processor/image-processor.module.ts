@@ -11,8 +11,6 @@ import { ImageProcessor } from "./image.processor";
       defaultJobOptions: {
         removeOnComplete: true,
         removeOnFail: 3,
-        // Increase timeout for long-running jobs (e.g., HEIC conversion, large images)
-        timeout: 300000, // 5 minutes
       },
     }),
   ],
