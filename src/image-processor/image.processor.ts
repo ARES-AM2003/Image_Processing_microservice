@@ -15,6 +15,8 @@ const execAsync = promisify(exec);
 
 @Processor("image-processing", {
   concurrency: 1, // Process one job at a time to manage memory
+  lockDuration: 300000, // 5 minutes lock duration for long-running jobs
+  lockRenewTime: 15000, // Renew lock every 15 seconds
 })
 export class ImageProcessor extends WorkerHost {
   private readonly logger = new Logger(ImageProcessor.name);

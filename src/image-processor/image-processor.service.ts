@@ -42,6 +42,7 @@ export class ImageProcessorService {
         backoff: { type: "exponential", delay: 2000 },
         removeOnComplete: true,
         removeOnFail: false,
+        timeout: 300000, // 5 minutes timeout for long-running jobs
       },
     );
   }
@@ -66,6 +67,7 @@ export class ImageProcessorService {
         attempts: 1,
         removeOnComplete: true,
         removeOnFail: 3,
+        timeout: 300000, // 5 minutes timeout for long-running jobs
       },
     }));
 
