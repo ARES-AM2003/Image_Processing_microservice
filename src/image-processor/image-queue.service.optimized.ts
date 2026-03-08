@@ -90,8 +90,8 @@ export class ImageQueueService implements OnModuleInit, OnModuleDestroy {
         host: process.env.REDIS_HOST || "localhost",
         port: Number(process.env.REDIS_PORT || 6379),
         password: process.env.REDIS_PASSWORD,
-        // Production optimizations
-        maxRetriesPerRequest: 1,
+        // Production optimizations - must be null for BullMQ blocking commands
+        maxRetriesPerRequest: null,
         retryDelayOnFailover: 50,
         enableReadyCheck: false,
         lazyConnect: true,

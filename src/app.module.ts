@@ -13,7 +13,7 @@ import { ImageProcessorModule } from "./image-processor/image-processor.module";
         host: process.env.REDIS_HOST || "localhost",
         port: Number(process.env.REDIS_PORT) || 6379,
         password: process.env.REDIS_PASSWORD,
-        maxRetriesPerRequest: 3,
+        maxRetriesPerRequest: null,
         retryDelayOnFailover: 100,
         enableReadyCheck: false,
         lazyConnect: true,
