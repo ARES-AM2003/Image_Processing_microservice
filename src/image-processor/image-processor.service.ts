@@ -229,7 +229,7 @@ export class ImageProcessorService {
     const hash = createHash("sha256")
       .update(`${bucket}:${key}`)
       .digest("hex");
-    return `img:${hash}`;
+    return `img_${hash}`;
   }
 
   async pauseQueue() {

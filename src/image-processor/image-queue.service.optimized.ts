@@ -419,7 +419,7 @@ export class ImageQueueService implements OnModuleInit, OnModuleDestroy {
     const hash = createHash("sha256")
       .update(`${bucket}:${key}`)
       .digest("hex");
-    return `img:${hash}`;
+    return `img_${hash}`;
   }
 
   private chunkArray<T>(array: T[], chunkSize: number): T[][] {
