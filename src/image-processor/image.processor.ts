@@ -15,7 +15,7 @@ import { promisify } from "util";
 import { exec } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { PassThrough, Readable } from "stream";
+import { Readable } from "stream";
 const decode = require("heic-decode");
 const execAsync = promisify(exec);
 
@@ -140,24 +140,6 @@ export class ImageProcessor extends WorkerHost {
     }
 
     return this.bodyToBuffer(result.Body);
-  }
-
-  private async getObjectStream(bucket: string, key: string): Promise<Readable> {
-    const result = await this.s3Client.send(
-      new GetObjectCommand({ Bucket: bucket, Key: key }),
-    );
-
-    if (!result.Body) {
-      throw new Error(`Empty S3 body for ${bucket}/${key}`);
-    }
-
-    const body = result.Body as any;
-    if (typeof body.pipe === "function") {
-      return body as Readable;
-    }
-
-    const buffer = await this.bodyToBuffer(result.Body);
-    return Readable.from(buffer);
   }
 
   private async bodyToBuffer(body: any): Promise<Buffer> {
@@ -847,8 +829,11 @@ export class ImageProcessor extends WorkerHost {
         `📸 Processing image (Start: ${Math.round(startMemory.heapUsed / 1024 / 1024)}MB)`,
       );
 
+      // Load source object first to avoid unknown-length streaming upload issues
+      const sourceBuffer = await this.getObjectAsBuffer(bucket, processKey);
+
       // Production Sharp transform with aggressive optimization
-      let sharpTransform = sharp({
+      let sharpTransform = sharp(sourceBuffer, {
         failOnError: false,
         density: 72,
         limitInputPixels: this.maxPixels,
@@ -903,41 +888,18 @@ export class ImageProcessor extends WorkerHost {
       // Log upload parameters for debugging
       this.logger.log(`📤 Starting main preview upload`);
 
-      // Create PassThrough stream for proper pipeline
-      const passThrough = new PassThrough();
+      const outputBuffer = await sharpTransform.toBuffer();
 
-      const uploadPromise = this.s3Client.send(
+      await this.s3Client.send(
         new PutObjectCommand({
           Bucket: bucket,
           Key: previewKey,
-          Body: passThrough,
+          Body: outputBuffer,
+          ContentLength: outputBuffer.length,
           ContentType: contentType,
           StorageClass: "STANDARD",
         }),
       );
-
-      // Note: AWS S3 upload stream only emits 'httpUploadProgress' events, errors are handled in promise
-
-      // Proper stream pipeline: download → sharp → passThrough → upload
-      const downloadStream = await this.getObjectStream(bucket, processKey);
-
-      // Add stream debugging and error handling
-      downloadStream.on("error", (error) => {
-        this.logger.error(`❌ Download stream error: ${error.message}`);
-      });
-
-      sharpTransform.on("error", (error) => {
-        this.logger.error(`❌ Sharp transform error: ${error.message}`);
-      });
-
-      passThrough.on("error", (error) => {
-        this.logger.error(`❌ PassThrough stream error: ${error.message}`);
-      });
-
-      // Chain the streams correctly
-      downloadStream.pipe(sharpTransform).pipe(passThrough);
-
-      await uploadPromise;
 
       // Log upload result details for debugging
       this.logger.log(`📤 Upload successful`);
