@@ -12,6 +12,11 @@ import { ImageProcessor } from "./image.processor";
         removeOnComplete: true,
         removeOnFail: 3,
       },
+      streams: {
+        events: {
+          maxLen: Number(process.env.BULLMQ_EVENTS_MAXLEN || 2000),
+        },
+      },
     }),
   ],
   controllers: [ImageProcessorController],

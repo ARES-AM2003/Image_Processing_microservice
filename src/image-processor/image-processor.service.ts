@@ -6,6 +6,12 @@ import { Queue, QueueEvents } from "bullmq";
 export class ImageProcessorService {
   private readonly logger = new Logger(ImageProcessorService.name);
   private queueEvents: QueueEvents;
+  private readonly maxQueuedJobs = Number(
+    process.env.QUEUE_MAX_WAITING_JOBS || 20000,
+  );
+  private readonly enqueueChunkSize = Number(
+    process.env.ENQUEUE_CHUNK_SIZE || 500,
+  );
 
   constructor(@InjectQueue("image-processing") public readonly queue: Queue) {
     this.queueEvents = new QueueEvents("image-processing", {
@@ -34,6 +40,8 @@ export class ImageProcessorService {
   }
 
   async addImageJob(bucket: string, key: string) {
+    await this.ensureQueueCapacity(1);
+
     this.logger.log(`Adding image job`);
     return this.queue.add(
       "generate-preview",
@@ -42,7 +50,7 @@ export class ImageProcessorService {
         attempts: 1,
         backoff: { type: "exponential", delay: 2000 },
         removeOnComplete: true,
-        removeOnFail: false,
+        removeOnFail: 100,
       },
     );
   }
@@ -50,9 +58,10 @@ export class ImageProcessorService {
   async addImageJobsBatch(
     bucket: string,
     keys: string[],
-    batchSize = Number(process.env.BATCH_SIZE || 500),
+    batchSize = Number(process.env.BATCH_SIZE || this.enqueueChunkSize),
   ) {
     const startTime = Date.now();
+    await this.ensureQueueCapacity(keys.length);
 
     // Skip logging for very large batches to avoid overhead
     if (keys.length < 1000) {
@@ -70,8 +79,11 @@ export class ImageProcessorService {
       },
     }));
 
-    // Single bulk operation - fastest approach
-    await this.queue.addBulk(jobs);
+    // Chunked bulk operations to avoid large Redis Lua allocations.
+    const chunkSize = Math.max(1, Math.min(batchSize, this.enqueueChunkSize));
+    for (let i = 0; i < jobs.length; i += chunkSize) {
+      await this.queue.addBulk(jobs.slice(i, i + chunkSize));
+    }
 
     const enqueueTime = Date.now() - startTime;
     this.logger.log(`⚡ Enqueued ${keys.length} jobs in ${enqueueTime}ms`);
@@ -186,6 +198,25 @@ export class ImageProcessorService {
       after: afterCounts,
       message: `Successfully cleared ${totalRemoved} jobs from queue`,
     };
+  }
+
+  private async ensureQueueCapacity(incomingJobs: number): Promise<void> {
+    const [waiting, delayed, prioritized] = await Promise.all([
+      this.queue.getWaitingCount(),
+      this.queue.getDelayedCount(),
+      this.queue.getPrioritizedCount(),
+    ]);
+
+    const currentQueued = waiting + delayed + prioritized;
+    const projected = currentQueued + incomingJobs;
+
+    if (projected > this.maxQueuedJobs) {
+      const message =
+        `Queue capacity exceeded: current=${currentQueued}, incoming=${incomingJobs}, ` +
+        `limit=${this.maxQueuedJobs}. Pause producers or clear queue before retrying.`;
+      this.logger.warn(message);
+      throw new Error(message);
+    }
   }
 
   async pauseQueue() {

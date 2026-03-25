@@ -1,15 +1,21 @@
-import { Processor, WorkerHost } from "@nestjs/bullmq";
+import { OnWorkerEvent, Processor, WorkerHost } from "@nestjs/bullmq";
 import { Job } from "bullmq";
 import { Logger } from "@nestjs/common";
 import sharp from "sharp";
-import * as AWS from "aws-sdk";
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import * as https from "https";
 import * as os from "os";
 import { promisify } from "util";
 import { exec } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { PassThrough } from "stream";
+import { PassThrough, Readable } from "stream";
 const decode = require("heic-decode");
 const execAsync = promisify(exec);
 
@@ -20,7 +26,7 @@ const execAsync = promisify(exec);
 })
 export class ImageProcessor extends WorkerHost {
   private readonly logger = new Logger(ImageProcessor.name);
-  private readonly s3Client: AWS.S3;
+  private readonly s3Client: S3Client;
   private readonly memoryThreshold = Math.floor(os.totalmem() * 0.3); // 30% of total RAM
 
   private readonly maxPixels = 50 * 1024 * 1024; // 50MP limit for safety
@@ -96,28 +102,87 @@ export class ImageProcessor extends WorkerHost {
     sharp.simd(true); // Enable SIMD acceleration
 
     // Production S3 client optimizations
-    this.s3Client = new AWS.S3({
-      accessKeyId: process.env.S3_ACCESS_KEY,
-      secretAccessKey: process.env.S3_SECRET_KEY,
+    this.s3Client = new S3Client({
+      credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY || "",
+        secretAccessKey: process.env.S3_SECRET_KEY || "",
+      },
       region: process.env.S3_REGION,
       endpoint: process.env.S3_ENDPOINT,
-      s3ForcePathStyle: true,
-      signatureVersion: "v4",
-      maxRetries: 1, // Minimal retries for speed
-      httpOptions: {
-        timeout: 60000, // 60s timeout
-        agent: new https.Agent({
+      forcePathStyle: true,
+      maxAttempts: 2,
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: 5000,
+        socketTimeout: 60000,
+        httpsAgent: new https.Agent({
           keepAlive: true,
           maxSockets: 50,
           maxFreeSockets: 10,
         }),
-      },
-      params: {
-        ServerSideEncryption: undefined,
-      },
+      }),
     });
 
     // S3 Configuration loaded
+  }
+
+  @OnWorkerEvent("error")
+  onWorkerError(error: Error): void {
+    this.logger.error(`Worker error: ${error.message}`);
+  }
+
+  private async getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
+    const result = await this.s3Client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+    );
+
+    if (!result.Body) {
+      throw new Error(`Empty S3 body for ${bucket}/${key}`);
+    }
+
+    return this.bodyToBuffer(result.Body);
+  }
+
+  private async getObjectStream(bucket: string, key: string): Promise<Readable> {
+    const result = await this.s3Client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+    );
+
+    if (!result.Body) {
+      throw new Error(`Empty S3 body for ${bucket}/${key}`);
+    }
+
+    const body = result.Body as any;
+    if (typeof body.pipe === "function") {
+      return body as Readable;
+    }
+
+    const buffer = await this.bodyToBuffer(result.Body);
+    return Readable.from(buffer);
+  }
+
+  private async bodyToBuffer(body: any): Promise<Buffer> {
+    if (Buffer.isBuffer(body)) {
+      return body;
+    }
+
+    if (body instanceof Uint8Array) {
+      return Buffer.from(body);
+    }
+
+    if (typeof body?.transformToByteArray === "function") {
+      const data = await body.transformToByteArray();
+      return Buffer.from(data);
+    }
+
+    if (typeof body?.pipe === "function") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of body as Readable) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      return Buffer.concat(chunks);
+    }
+
+    throw new Error("Unsupported S3 body type");
   }
 
   /**
@@ -125,9 +190,9 @@ export class ImageProcessor extends WorkerHost {
    */
   private async isImageFile(bucket: string, key: string): Promise<boolean> {
     try {
-      const headObject = await this.s3Client
-        .headObject({ Bucket: bucket, Key: key })
-        .promise();
+      const headObject = await this.s3Client.send(
+        new HeadObjectCommand({ Bucket: bucket, Key: key }),
+      );
 
       const contentType = headObject.ContentType || "";
       const isImage = contentType.startsWith("image/");
@@ -203,10 +268,11 @@ export class ImageProcessor extends WorkerHost {
    */
   private async fileExists(bucket: string, key: string): Promise<boolean> {
     try {
-      await this.s3Client.headObject({ Bucket: bucket, Key: key }).promise();
+      await this.s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
       return true;
     } catch (error) {
-      if (error.code === "NoSuchKey" || error.statusCode === 404) {
+      const awsError = error as any;
+      if (awsError?.name === "NotFound" || awsError?.$metadata?.httpStatusCode === 404) {
         return false;
       }
       // Re-throw other errors (permission issues, etc.)
@@ -225,11 +291,7 @@ export class ImageProcessor extends WorkerHost {
       console.log(`🔍 Validating HEIC/HEIF format...`);
 
       // Get object as buffer for libheif validation
-      const s3Object = await this.s3Client
-        .getObject({ Bucket: bucket, Key: key })
-        .promise();
-
-      const inputBuffer = s3Object.Body as Buffer;
+      const inputBuffer = await this.getObjectAsBuffer(bucket, key);
 
       if (!inputBuffer || inputBuffer.length === 0) {
         console.warn(`❌ Empty buffer for HEIC/HEIF file`);
@@ -274,7 +336,8 @@ export class ImageProcessor extends WorkerHost {
       }
     } catch (error) {
       // Check if it's a "file not found" error
-      if (error.code === "NoSuchKey" || error.statusCode === 404) {
+      const awsError = error as any;
+      if (awsError?.name === "NotFound" || awsError?.$metadata?.httpStatusCode === 404) {
         console.error(`❌ HEIC/HEIF file not found in S3`);
         throw new Error(`HEIC/HEIF file not found in S3`);
       }
@@ -359,12 +422,10 @@ export class ImageProcessor extends WorkerHost {
 
     try {
       // Get object as buffer for Sharp validation
-      const s3Object = await this.s3Client
-        .getObject({ Bucket: bucket, Key: key })
-        .promise();
+      const inputBuffer = await this.getObjectAsBuffer(bucket, key);
 
       // Use Sharp to validate the image format
-      const metadata = await sharp(s3Object.Body as Buffer).metadata();
+      const metadata = await sharp(inputBuffer).metadata();
 
       if (metadata.format !== undefined) {
         console.log(`✅ Validated as ${metadata.format} format`);
@@ -375,7 +436,8 @@ export class ImageProcessor extends WorkerHost {
       }
     } catch (error) {
       // Check if it's a "file not found" error
-      if (error.code === "NoSuchKey" || error.statusCode === 404) {
+      const awsError = error as any;
+      if (awsError?.name === "NotFound" || awsError?.$metadata?.httpStatusCode === 404) {
         console.error(`❌ File not found in S3`);
         throw new Error(`File not found in S3`);
       }
@@ -399,17 +461,18 @@ export class ImageProcessor extends WorkerHost {
    */
   private async getFileSize(bucket: string, key: string): Promise<number> {
     try {
-      const headObject = await this.s3Client
-        .headObject({
+      const headObject = await this.s3Client.send(
+        new HeadObjectCommand({
           Bucket: bucket,
           Key: key,
-        })
-        .promise();
+        }),
+      );
 
       return headObject.ContentLength || 0;
     } catch (error) {
       // Check if it's a "file not found" error
-      if (error.code === "NoSuchKey" || error.statusCode === 404) {
+      const awsError = error as any;
+      if (awsError?.name === "NotFound" || awsError?.$metadata?.httpStatusCode === 404) {
         console.error(`❌ File not found in S3`);
         throw new Error(`File not found in S3`);
       }
@@ -438,11 +501,7 @@ export class ImageProcessor extends WorkerHost {
       console.log(`🔄 Converting HEIC/HEIF to WebP format using libheif-js...`);
 
       // Get the HEIC/HEIF file from S3
-      const s3Object = await this.s3Client
-        .getObject({ Bucket: bucket, Key: key })
-        .promise();
-
-      const inputBuffer = s3Object.Body as Buffer;
+      const inputBuffer = await this.getObjectAsBuffer(bucket, key);
 
       if (!inputBuffer || inputBuffer.length === 0) {
         throw new Error(`Empty or invalid HEIC/HEIF file: ${key}`);
@@ -537,15 +596,15 @@ export class ImageProcessor extends WorkerHost {
 
       // Upload the converted WebP to S3
       console.log(`📤 Uploading converted WebP to S3...`);
-      await this.s3Client
-        .upload({
+      await this.s3Client.send(
+        new PutObjectCommand({
           Bucket: bucket,
           Key: webpKey,
           Body: outputBuffer,
           ContentType: "image/webp",
           StorageClass: "STANDARD",
-        })
-        .promise();
+        }),
+      );
 
       const conversionTime = Date.now() - startTime;
       console.log(`✅ Converted HEIC/HEIF to WebP in ${conversionTime}ms`);
@@ -566,7 +625,8 @@ export class ImageProcessor extends WorkerHost {
       );
 
       // Check if it's a file not found error
-      if (error.code === "NoSuchKey" || error.statusCode === 404) {
+      const awsError = error as any;
+      if (awsError?.name === "NotFound" || awsError?.$metadata?.httpStatusCode === 404) {
         throw new Error(`HEIC/HEIF file not found in S3: ${bucket}/${key}`);
       }
 
@@ -846,20 +906,20 @@ export class ImageProcessor extends WorkerHost {
       // Create PassThrough stream for proper pipeline
       const passThrough = new PassThrough();
 
-      const uploadStream = this.s3Client.upload({
-        Bucket: bucket,
-        Key: previewKey,
-        Body: passThrough,
-        ContentType: contentType,
-        StorageClass: "STANDARD",
-      });
+      const uploadPromise = this.s3Client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: previewKey,
+          Body: passThrough,
+          ContentType: contentType,
+          StorageClass: "STANDARD",
+        }),
+      );
 
       // Note: AWS S3 upload stream only emits 'httpUploadProgress' events, errors are handled in promise
 
       // Proper stream pipeline: download → sharp → passThrough → upload
-      const downloadStream = this.s3Client
-        .getObject({ Bucket: bucket, Key: processKey })
-        .createReadStream();
+      const downloadStream = await this.getObjectStream(bucket, processKey);
 
       // Add stream debugging and error handling
       downloadStream.on("error", (error) => {
@@ -877,16 +937,16 @@ export class ImageProcessor extends WorkerHost {
       // Chain the streams correctly
       downloadStream.pipe(sharpTransform).pipe(passThrough);
 
-      const uploadResult = await uploadStream.promise();
+      await uploadPromise;
 
       // Log upload result details for debugging
       this.logger.log(`📤 Upload successful`);
 
       // Verify the file was actually uploaded by checking if it exists
       try {
-        await this.s3Client
-          .headObject({ Bucket: bucket, Key: previewKey })
-          .promise();
+        await this.s3Client.send(
+          new HeadObjectCommand({ Bucket: bucket, Key: previewKey }),
+        );
         this.logger.log(`✅ Verified: File exists in S3`);
       } catch (verifyError) {
         this.logger.error(
