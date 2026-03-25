@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue, QueueEvents } from "bullmq";
+import { createHash } from "crypto";
 
 @Injectable()
 export class ImageProcessorService {
@@ -47,6 +48,7 @@ export class ImageProcessorService {
       "generate-preview",
       { bucket, key },
       {
+        jobId: this.buildDeterministicJobId(bucket, key),
         attempts: 1,
         backoff: { type: "exponential", delay: 2000 },
         removeOnComplete: true,
@@ -61,18 +63,22 @@ export class ImageProcessorService {
     batchSize = Number(process.env.BATCH_SIZE || this.enqueueChunkSize),
   ) {
     const startTime = Date.now();
-    await this.ensureQueueCapacity(keys.length);
+    const uniqueKeys = [...new Set(keys)];
+    await this.ensureQueueCapacity(uniqueKeys.length);
 
     // Skip logging for very large batches to avoid overhead
-    if (keys.length < 1000) {
-      this.logger.log(`📦 Enqueue ${keys.length} keys`);
+    if (uniqueKeys.length < 1000) {
+      this.logger.log(
+        `📦 Enqueue ${uniqueKeys.length} unique keys (skipped ${keys.length - uniqueKeys.length} duplicates in request)`,
+      );
     }
 
     // Use single bulk operation for all sizes - much faster
-    const jobs = keys.map((key) => ({
+    const jobs = uniqueKeys.map((key) => ({
       name: "generate-preview",
       data: { bucket, key },
       opts: {
+        jobId: this.buildDeterministicJobId(bucket, key),
         attempts: 1,
         removeOnComplete: true,
         removeOnFail: 3,
@@ -86,7 +92,7 @@ export class ImageProcessorService {
     }
 
     const enqueueTime = Date.now() - startTime;
-    this.logger.log(`⚡ Enqueued ${keys.length} jobs in ${enqueueTime}ms`);
+    this.logger.log(`⚡ Enqueued ${uniqueKeys.length} jobs in ${enqueueTime}ms`);
   }
 
   async getQueueStatus() {
@@ -217,6 +223,13 @@ export class ImageProcessorService {
       this.logger.warn(message);
       throw new Error(message);
     }
+  }
+
+  private buildDeterministicJobId(bucket: string, key: string): string {
+    const hash = createHash("sha256")
+      .update(`${bucket}:${key}`)
+      .digest("hex");
+    return `img:${hash}`;
   }
 
   async pauseQueue() {

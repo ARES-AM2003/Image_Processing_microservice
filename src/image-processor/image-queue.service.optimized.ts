@@ -8,6 +8,7 @@ import { InjectQueue } from "@nestjs/bullmq";
 import { Queue, QueueEvents } from "bullmq";
 import { basename } from "path";
 import * as os from "os";
+import { createHash } from "crypto";
 
 interface JobMetrics {
   processed: number;
@@ -111,6 +112,7 @@ export class ImageQueueService implements OnModuleInit, OnModuleDestroy {
         "generate-preview",
         { bucket, key },
         {
+          jobId: this.buildDeterministicJobId(bucket, key),
           attempts: 2, // Reduced from 3
           backoff: { type: "exponential", delay: 2000 }, // Faster backoff
           removeOnComplete: 10, // Keep fewer completed jobs
@@ -133,19 +135,21 @@ export class ImageQueueService implements OnModuleInit, OnModuleDestroy {
     customBatchSize?: number,
   ): Promise<void> {
     const startTime = Date.now();
+    const uniqueKeys = [...new Set(keys)];
     const batchSize =
-      customBatchSize || this.calculateOptimalBatchSize(keys.length);
+      customBatchSize || this.calculateOptimalBatchSize(uniqueKeys.length);
 
     this.logger.log(
-      `📦 Processing ${keys.length} jobs in batches of ${batchSize}`,
+      `📦 Processing ${uniqueKeys.length} unique jobs in batches of ${batchSize} (skipped ${keys.length - uniqueKeys.length} duplicates in request)`,
     );
 
     try {
       // Create all jobs without delay - maximum throughput
-      const allJobs = keys.map((key) => ({
+      const allJobs = uniqueKeys.map((key) => ({
         name: "generate-preview",
         data: { bucket, key },
         opts: {
+          jobId: this.buildDeterministicJobId(bucket, key),
           attempts: 2,
           removeOnComplete: 10,
           removeOnFail: 5,
@@ -166,10 +170,10 @@ export class ImageQueueService implements OnModuleInit, OnModuleDestroy {
       const failed = results.filter((r) => r.status === "rejected").length;
 
       const processingTime = Date.now() - startTime;
-      const throughput = Math.round((keys.length / processingTime) * 1000);
+      const throughput = Math.round((uniqueKeys.length / processingTime) * 1000);
 
       this.logger.log(
-        `⚡ Enqueued ${keys.length} jobs in ${processingTime}ms (${throughput} jobs/sec) - Success: ${successful}/${batches.length} batches`,
+        `⚡ Enqueued ${uniqueKeys.length} jobs in ${processingTime}ms (${throughput} jobs/sec) - Success: ${successful}/${batches.length} batches`,
       );
 
       if (failed > 0) {
@@ -409,6 +413,13 @@ export class ImageQueueService implements OnModuleInit, OnModuleDestroy {
     if (totalJobs < 100) return Math.min(totalJobs, 25);
     if (totalJobs < 1000) return Math.min(totalJobs, baseSize);
     return Math.min(200, baseSize * 2); // Cap at 200 for very large batches
+  }
+
+  private buildDeterministicJobId(bucket: string, key: string): string {
+    const hash = createHash("sha256")
+      .update(`${bucket}:${key}`)
+      .digest("hex");
+    return `img:${hash}`;
   }
 
   private chunkArray<T>(array: T[], chunkSize: number): T[][] {
