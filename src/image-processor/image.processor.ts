@@ -721,10 +721,6 @@ export class ImageProcessor extends WorkerHost {
       }
     } finally {
       this.activeJobs.delete(jobId);
-      // Force garbage collection if available
-      if (global.gc && this.activeJobs.size === 0) {
-        global.gc();
-      }
     }
   }
 

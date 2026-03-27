@@ -48,11 +48,11 @@ export class ImageProcessorService {
       "generate-preview",
       { bucket, key },
       {
-        jobId: this.buildDeterministicJobId(bucket, key),
+        jobId: this.buildDeterministicJobId("generate-preview", bucket, key),
         attempts: 1,
         backoff: { type: "exponential", delay: 2000 },
         removeOnComplete: true,
-        removeOnFail: 100,
+        removeOnFail: true,
       },
     );
   }
@@ -66,9 +66,17 @@ export class ImageProcessorService {
     const uniqueKeys = [...new Set(keys)];
     const existingChecks = await Promise.all(
       uniqueKeys.map(async (key) => {
-        const jobId = this.buildDeterministicJobId(bucket, key);
+        const jobId = this.buildDeterministicJobId("generate-preview", bucket, key);
         const existingJob = await this.queue.getJob(jobId);
-        return { key, jobId, exists: !!existingJob };
+        
+        // Only skip if the job is actually waiting, active, or delayed - allowing retry of failed/completed jobs
+        let isActiveOrWaiting = false;
+        if (existingJob) {
+          const state = await existingJob.getState();
+          isActiveOrWaiting = state === "waiting" || state === "active" || state === "delayed" || state === "prioritized";
+        }
+        
+        return { key, jobId, exists: isActiveOrWaiting };
       }),
     );
 
@@ -97,10 +105,10 @@ export class ImageProcessorService {
       name: "generate-preview",
       data: { bucket, key },
       opts: {
-        jobId: this.buildDeterministicJobId(bucket, key),
+        jobId: this.buildDeterministicJobId("generate-preview", bucket, key),
         attempts: 1,
         removeOnComplete: true,
-        removeOnFail: 3,
+        removeOnFail: true,
       },
     }));
 
@@ -137,9 +145,10 @@ export class ImageProcessorService {
       "test-heic-conversion",
       { bucket, key },
       {
+        jobId: this.buildDeterministicJobId("test-heic-conversion", bucket, key),
         attempts: 1,
         removeOnComplete: true,
-        removeOnFail: false,
+        removeOnFail: true,
       },
     );
   }
@@ -168,15 +177,12 @@ export class ImageProcessorService {
 
     for (const job of activeJobs) {
       try {
-        await job.moveToFailed(
-          new Error("Job cancelled by clear queue operation"),
-          "0",
-        );
-        this.logger.debug(`  ❌ Stopped job ${job.id}`);
+        // We cannot reliably call moveToFailed without the lock token held by the worker.
+        // Instead, we log that it's being cancelled and the worker will pick up the paused state
+        // or we rely on clean() to remove it once the lock expires if the worker is dead.
+        this.logger.debug(`  🛑 Active job ${job.id} cannot be forcibly stopped safely without lock token`);
       } catch (error) {
-        this.logger.warn(
-          `  ⚠️  Could not stop job ${job.id}: ${error.message}`,
-        );
+        this.logger.warn(`  ⚠️  Error handling active job ${job.id}: ${error.message}`);
       }
     }
 
@@ -246,9 +252,9 @@ export class ImageProcessorService {
     }
   }
 
-  private buildDeterministicJobId(bucket: string, key: string): string {
+  private buildDeterministicJobId(jobName: string, bucket: string, key: string): string {
     const hash = createHash("sha256")
-      .update(`${bucket}:${key}`)
+      .update(`${jobName}:${bucket}:${key}`)
       .digest("hex");
     return `img_${hash}`;
   }
