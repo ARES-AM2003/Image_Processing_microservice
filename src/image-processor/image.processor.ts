@@ -19,15 +19,34 @@ import { Readable } from "stream";
 const decode = require("heic-decode");
 const execAsync = promisify(exec);
 
+// Calculate worker concurrency based on CPU cores.
+// We use half the CPU count so each job still gets dedicated threads via Sharp.
+// Minimum 2 for meaningful parallelism, capped at 8 to prevent memory spikes.
+const WORKER_CONCURRENCY = Math.min(
+  8,
+  Math.max(2, Math.floor(os.cpus().length / 2)),
+);
+
+// Each concurrent job gets an equal share of Sharp's thread pool.
+// At minimum 1, capped at 4 threads per job (plenty for most images).
+const SHARP_THREADS_PER_JOB = Math.min(
+  4,
+  Math.max(1, Math.floor(os.cpus().length / WORKER_CONCURRENCY)),
+);
+
 @Processor("image-processing", {
-  concurrency: 1, // Process one job at a time to manage memory
+  concurrency: WORKER_CONCURRENCY, // Process multiple jobs in parallel, utilizing idle I/O time
   lockDuration: 300000, // 5 minutes lock duration for long-running jobs
   lockRenewTime: 15000, // Renew lock every 15 seconds
 })
 export class ImageProcessor extends WorkerHost {
   private readonly logger = new Logger(ImageProcessor.name);
   private readonly s3Client: S3Client;
-  private readonly memoryThreshold = Math.floor(os.totalmem() * 0.3); // 30% of total RAM
+  // With parallel workers, each job can use more memory simultaneously.
+  // We allow up to 70% total RAM across all jobs (30% / concurrency each).
+  private readonly memoryThreshold = Math.floor(
+    (os.totalmem() * 0.7) / WORKER_CONCURRENCY,
+  );
 
   private readonly maxPixels = 50 * 1024 * 1024; // 50MP limit for safety
   private processedCount = 0;
@@ -98,7 +117,9 @@ export class ImageProcessor extends WorkerHost {
     super();
     // Production Sharp optimizations
     sharp.cache({ files: 0, items: 0 }); // Disable all caching
-    sharp.concurrency(Math.max(1, os.cpus().length)); // Use all CPU cores
+    // Divide Sharp's thread pool equally across concurrent BullMQ workers
+    // so multiple jobs running in parallel don't starve each other's threads.
+    sharp.concurrency(SHARP_THREADS_PER_JOB);
     sharp.simd(true); // Enable SIMD acceleration
 
     // Production S3 client optimizations
