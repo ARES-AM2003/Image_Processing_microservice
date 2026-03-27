@@ -64,17 +64,36 @@ export class ImageProcessorService {
   ) {
     const startTime = Date.now();
     const uniqueKeys = [...new Set(keys)];
-    await this.ensureQueueCapacity(uniqueKeys.length);
+    const existingChecks = await Promise.all(
+      uniqueKeys.map(async (key) => {
+        const jobId = this.buildDeterministicJobId(bucket, key);
+        const existingJob = await this.queue.getJob(jobId);
+        return { key, jobId, exists: !!existingJob };
+      }),
+    );
+
+    const keysToEnqueue = existingChecks
+      .filter((item) => !item.exists)
+      .map((item) => item.key);
+    const existingInQueue = existingChecks.length - keysToEnqueue.length;
+
+    await this.ensureQueueCapacity(keysToEnqueue.length);
 
     // Skip logging for very large batches to avoid overhead
     if (uniqueKeys.length < 1000) {
       this.logger.log(
-        `📦 Enqueue ${uniqueKeys.length} unique keys (skipped ${keys.length - uniqueKeys.length} duplicates in request)`,
+        `📦 Enqueue request: ${uniqueKeys.length} unique keys ` +
+          `(skipped ${keys.length - uniqueKeys.length} duplicates in request, ${existingInQueue} already in queue)`,
       );
     }
 
+    if (keysToEnqueue.length === 0) {
+      this.logger.log(`⏭️ No new jobs to enqueue (all keys already exist in queue)`);
+      return;
+    }
+
     // Use single bulk operation for all sizes - much faster
-    const jobs = uniqueKeys.map((key) => ({
+    const jobs = keysToEnqueue.map((key) => ({
       name: "generate-preview",
       data: { bucket, key },
       opts: {
@@ -92,7 +111,9 @@ export class ImageProcessorService {
     }
 
     const enqueueTime = Date.now() - startTime;
-    this.logger.log(`⚡ Enqueued ${uniqueKeys.length} jobs in ${enqueueTime}ms`);
+    this.logger.log(
+      `⚡ Enqueued ${keysToEnqueue.length} new jobs in ${enqueueTime}ms (${existingInQueue} skipped as existing)`,
+    );
   }
 
   async getQueueStatus() {
