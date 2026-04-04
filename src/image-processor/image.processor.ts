@@ -131,7 +131,7 @@ export class ImageProcessor extends WorkerHost {
       region: process.env.S3_REGION,
       endpoint: process.env.S3_ENDPOINT,
       forcePathStyle: true,
-      maxAttempts: 2,
+      maxAttempts: 10,
       requestHandler: new NodeHttpHandler({
         connectionTimeout: 5000,
         socketTimeout: 60000,
@@ -599,15 +599,34 @@ export class ImageProcessor extends WorkerHost {
 
       // Upload the converted WebP to S3
       console.log(`📤 Uploading converted WebP to S3...`);
-      await this.s3Client.send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: webpKey,
-          Body: outputBuffer,
-          ContentType: "image/webp",
-          StorageClass: "STANDARD",
-        }),
-      );
+      let uploadAttempts = 0;
+      const maxUploadAttempts = 5;
+      while (uploadAttempts < maxUploadAttempts) {
+        try {
+          await this.s3Client.send(
+            new PutObjectCommand({
+              Bucket: bucket,
+              Key: webpKey,
+              Body: outputBuffer,
+              ContentType: "image/webp",
+              StorageClass: "STANDARD",
+            }),
+          );
+          break;
+        } catch (uploadError: any) {
+          uploadAttempts++;
+          if (
+            uploadAttempts >= maxUploadAttempts ||
+            (!uploadError.message?.includes("temporary failure") &&
+              !uploadError.message?.includes("ServiceUnavailable") &&
+              uploadError.$metadata?.httpStatusCode !== 503)
+          ) {
+            throw uploadError;
+          }
+          console.warn(`⚠️ WebP upload failed (attempt ${uploadAttempts}/${maxUploadAttempts}): ${uploadError.message}. Retrying...`);
+          await new Promise((resolve) => setTimeout(resolve, uploadAttempts * 2000));
+        }
+      }
 
       const conversionTime = Date.now() - startTime;
       console.log(`✅ Converted HEIC/HEIF to WebP in ${conversionTime}ms`);
@@ -907,16 +926,35 @@ export class ImageProcessor extends WorkerHost {
 
       const outputBuffer = await sharpTransform.toBuffer();
 
-      await this.s3Client.send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: previewKey,
-          Body: outputBuffer,
-          ContentLength: outputBuffer.length,
-          ContentType: contentType,
-          StorageClass: "STANDARD",
-        }),
-      );
+      let uploadAttempts = 0;
+      const maxUploadAttempts = 5;
+      while (uploadAttempts < maxUploadAttempts) {
+        try {
+          await this.s3Client.send(
+            new PutObjectCommand({
+              Bucket: bucket,
+              Key: previewKey,
+              Body: outputBuffer,
+              ContentLength: outputBuffer.length,
+              ContentType: contentType,
+              StorageClass: "STANDARD",
+            }),
+          );
+          break;
+        } catch (uploadError: any) {
+          uploadAttempts++;
+          if (
+            uploadAttempts >= maxUploadAttempts ||
+            (!uploadError.message?.includes("temporary failure") &&
+              !uploadError.message?.includes("ServiceUnavailable") &&
+              uploadError.$metadata?.httpStatusCode !== 503)
+          ) {
+            throw uploadError;
+          }
+          this.logger.warn(`⚠️ Upload failed (attempt ${uploadAttempts}/${maxUploadAttempts}): ${uploadError.message}. Retrying...`);
+          await new Promise((resolve) => setTimeout(resolve, uploadAttempts * 2000));
+        }
+      }
 
       // Log upload result details for debugging
       this.logger.log(`📤 Upload successful`);
