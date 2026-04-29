@@ -1,10 +1,10 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue, QueueEvents } from "bullmq";
 import { createHash } from "crypto";
 
 @Injectable()
-export class ImageProcessorService {
+export class ImageProcessorService implements OnModuleDestroy {
   private readonly logger = new Logger(ImageProcessorService.name);
   private queueEvents: QueueEvents;
   private readonly maxQueuedJobs = Number(
@@ -13,6 +13,21 @@ export class ImageProcessorService {
   private readonly enqueueChunkSize = Number(
     process.env.ENQUEUE_CHUNK_SIZE || 500,
   );
+  private readonly previewStatusBaseUrl = (
+    process.env.PREVIEW_STATUS_BASE_URL || "https://prod.fotosfolio.com"
+  ).replace(/\/+$/, "");
+  private readonly previewStatusPath =
+    process.env.PREVIEW_STATUS_PATH || "/bulk/preview-status";
+  private readonly previewStatusBatchSize = Math.max(
+    1,
+    Number(process.env.PREVIEW_STATUS_BATCH_SIZE || process.env.BATCH_SIZE || 20),
+  );
+  private readonly previewStatusFlushIntervalMs = Number(
+    process.env.PREVIEW_STATUS_FLUSH_INTERVAL_MS || 5000,
+  );
+  private pendingPreviewStatusKeys = new Set<string>();
+  private previewStatusFlushInProgress = false;
+  private previewStatusFlushTimer: NodeJS.Timeout;
 
   constructor(@InjectQueue("image-processing") public readonly queue: Queue) {
     this.queueEvents = new QueueEvents("image-processing", {
@@ -23,12 +38,20 @@ export class ImageProcessorService {
         maxRetriesPerRequest: null,
       },
     });
+    this.previewStatusFlushTimer = setInterval(() => {
+      void this.flushPreviewStatusBatch();
+    }, this.previewStatusFlushIntervalMs);
     this.registerEventListeners();
   }
 
+  onModuleDestroy() {
+    clearInterval(this.previewStatusFlushTimer);
+  }
+
   private registerEventListeners() {
-    this.queueEvents.on("completed", (job) => {
+    this.queueEvents.on("completed", async (job) => {
       this.logger.log(`Job ${job.jobId} completed successfully`);
+      await this.onJobCompleted(job.jobId);
     });
 
     this.queueEvents.on("failed", (job, err) => {
@@ -38,6 +61,81 @@ export class ImageProcessorService {
     this.queueEvents.on("progress", (job, progress) => {
       this.logger.debug(`Job ${job.jobId} progress: ${progress}%`);
     });
+  }
+
+  private async onJobCompleted(jobId: string): Promise<void> {
+    try {
+      const completedJob = await this.queue.getJob(jobId);
+      const fileKey = completedJob?.data?.key;
+
+      if (!fileKey || typeof fileKey !== "string") {
+        return;
+      }
+
+      this.pendingPreviewStatusKeys.add(fileKey);
+
+      if (this.pendingPreviewStatusKeys.size >= this.previewStatusBatchSize) {
+        await this.flushPreviewStatusBatch();
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to prepare preview status update for job ${jobId}: ${error.message}`,
+      );
+    }
+  }
+
+  private async flushPreviewStatusBatch(): Promise<void> {
+    if (this.previewStatusFlushInProgress) {
+      return;
+    }
+
+    if (this.pendingPreviewStatusKeys.size === 0) {
+      return;
+    }
+
+    this.previewStatusFlushInProgress = true;
+
+    const fileKeys = Array.from(this.pendingPreviewStatusKeys).slice(
+      0,
+      this.previewStatusBatchSize,
+    );
+
+    for (const key of fileKeys) {
+      this.pendingPreviewStatusKeys.delete(key);
+    }
+
+    try {
+      const response = await fetch(
+        `${this.previewStatusBaseUrl}${this.previewStatusPath}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ fileKeys }),
+        },
+      );
+
+      if (!response.ok) {
+        const responseText = await response.text();
+        throw new Error(
+          `HTTP ${response.status} ${response.statusText} - ${responseText}`,
+        );
+      }
+
+      this.logger.log(
+        `✅ Preview status updated for ${fileKeys.length} file(s)`,
+      );
+    } catch (error) {
+      for (const key of fileKeys) {
+        this.pendingPreviewStatusKeys.add(key);
+      }
+      this.logger.error(
+        `Failed to call preview status API for ${fileKeys.length} file(s): ${error.message}`,
+      );
+    } finally {
+      this.previewStatusFlushInProgress = false;
+    }
   }
 
   async addImageJob(bucket: string, key: string) {
