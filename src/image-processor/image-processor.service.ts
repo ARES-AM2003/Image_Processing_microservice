@@ -17,7 +17,7 @@ export class ImageProcessorService implements OnModuleDestroy {
     process.env.PREVIEW_STATUS_BASE_URL || "https://prod.fotosfolio.com"
   ).replace(/\/+$/, "");
   private readonly previewStatusPath =
-    process.env.PREVIEW_STATUS_PATH || "/bulk/preview-status";
+    process.env.PREVIEW_STATUS_PATH || "/uploads/bulk/preview-status";
   private readonly previewStatusBatchSize = Math.max(
     1,
     Number(process.env.PREVIEW_STATUS_BATCH_SIZE || process.env.BATCH_SIZE || 20),
@@ -25,7 +25,7 @@ export class ImageProcessorService implements OnModuleDestroy {
   private readonly previewStatusFlushIntervalMs = Number(
     process.env.PREVIEW_STATUS_FLUSH_INTERVAL_MS || 5000,
   );
-  private pendingPreviewStatusKeys = new Set<string>();
+  private pendingPreviewStatusKeys = new Map<string, number>();
   private previewStatusFlushInProgress = false;
   private previewStatusFlushTimer: NodeJS.Timeout;
 
@@ -77,7 +77,7 @@ export class ImageProcessorService implements OnModuleDestroy {
         return;
       }
 
-      this.pendingPreviewStatusKeys.add(fileKey);
+      this.pendingPreviewStatusKeys.set(fileKey, 0);
 
       if (this.pendingPreviewStatusKeys.size >= this.previewStatusBatchSize) {
         await this.flushPreviewStatusBatch();
@@ -100,7 +100,7 @@ export class ImageProcessorService implements OnModuleDestroy {
 
     this.previewStatusFlushInProgress = true;
 
-    const fileKeys = Array.from(this.pendingPreviewStatusKeys).slice(
+    const fileKeys = Array.from(this.pendingPreviewStatusKeys.keys()).slice(
       0,
       this.previewStatusBatchSize,
     );
@@ -136,11 +136,18 @@ export class ImageProcessorService implements OnModuleDestroy {
       );
     } catch (error) {
       for (const key of fileKeys) {
-        this.pendingPreviewStatusKeys.add(key);
+        const retryCount = (this.pendingPreviewStatusKeys.get(key) || 0) + 1;
+        if (retryCount <= 3) {
+          this.pendingPreviewStatusKeys.set(key, retryCount);
+          this.logger.warn(
+            `⚠️  Retrying status update for ${key} (attempt ${retryCount}/3): ${error.message}`,
+          );
+        } else {
+          this.logger.error(
+            `❌ Max retries reached for ${key}. Giving up after 3 attempts. Error: ${error.message}`,
+          );
+        }
       }
-      this.logger.error(
-        `Failed to call preview status API for ${fileKeys.length} file(s): ${error.message}`,
-      );
     } finally {
       this.previewStatusFlushInProgress = false;
     }
