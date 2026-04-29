@@ -983,7 +983,7 @@ export class ImageProcessor extends WorkerHost {
         `✅ Completed in ${processingTime}ms (Memory: +${memoryDelta}MB)`,
       );
 
-      return { previewKey: previewKey };
+      return { previewKey, originalKey: key };
     } catch (error) {
       this.logger.error(`❌ Failed to process ${key}: ${error.message}`);
       throw error;

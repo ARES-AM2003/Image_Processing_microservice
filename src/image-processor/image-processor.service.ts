@@ -49,9 +49,9 @@ export class ImageProcessorService implements OnModuleDestroy {
   }
 
   private registerEventListeners() {
-    this.queueEvents.on("completed", async (job) => {
-      this.logger.log(`Job ${job.jobId} completed successfully`);
-      await this.onJobCompleted(job.jobId);
+    this.queueEvents.on("completed", async ({ jobId, returnvalue }) => {
+      this.logger.log(`Job ${jobId} completed successfully`);
+      await this.onJobCompleted(jobId, returnvalue);
     });
 
     this.queueEvents.on("failed", (job, err) => {
@@ -63,12 +63,17 @@ export class ImageProcessorService implements OnModuleDestroy {
     });
   }
 
-  private async onJobCompleted(jobId: string): Promise<void> {
+  private async onJobCompleted(jobId: string, returnvalue?: any): Promise<void> {
     try {
-      const completedJob = await this.queue.getJob(jobId);
-      const fileKey = completedJob?.data?.key;
+      let fileKey = returnvalue?.originalKey;
+
+      if (!fileKey) {
+        const completedJob = await this.queue.getJob(jobId);
+        fileKey = completedJob?.data?.key;
+      }
 
       if (!fileKey || typeof fileKey !== "string") {
+        this.logger.warn(`Could not find file key for completed job ${jobId}`);
         return;
       }
 
@@ -99,6 +104,8 @@ export class ImageProcessorService implements OnModuleDestroy {
       0,
       this.previewStatusBatchSize,
     );
+
+    this.logger.log(`🔄 Flushing preview status for ${fileKeys.length} file(s)...`);
 
     for (const key of fileKeys) {
       this.pendingPreviewStatusKeys.delete(key);
