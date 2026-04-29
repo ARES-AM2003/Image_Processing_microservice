@@ -774,6 +774,7 @@ export class ImageProcessor extends WorkerHost {
           skipped: true,
           reason: "Not an image file (content type)",
           fileType: key.split(".").pop()?.toLowerCase() || "unknown",
+          originalKey: key,
         };
       }
 
@@ -789,6 +790,7 @@ export class ImageProcessor extends WorkerHost {
           skipped: true,
           reason: "Not a valid image file (content)",
           fileType: key.split(".").pop()?.toLowerCase() || "unknown",
+          originalKey: key,
         };
       }
 
@@ -813,6 +815,7 @@ export class ImageProcessor extends WorkerHost {
           skipped: true,
           reason: "RAW format not supported",
           fileType: fileExtension || "unknown",
+          originalKey: key,
         };
       }
 
@@ -855,6 +858,7 @@ export class ImageProcessor extends WorkerHost {
               reason: "Corrupted or unsupported HEIC/HEIF file",
               fileType: fileExtension || "unknown",
               error: conversionError.message.replace("HEIC_CORRUPTED: ", ""),
+              originalKey: key,
             };
           }
           throw conversionError;
