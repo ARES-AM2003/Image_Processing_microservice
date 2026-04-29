@@ -819,25 +819,19 @@ export class ImageProcessor extends WorkerHost {
         };
       }
 
-      // Determine preview key - keep extension for PNG/WebP, change to .jpg for others
+      // Determine output extension: PNG stays PNG, all others become WebP
+      const outputExt = isPng ? "png" : "webp";
+
       let previewKey: string;
       let processKey = key;
 
       if (key.startsWith("Orginal") || key.startsWith("Original")) {
-        if (isPng || isWebp) {
-          previewKey = key.replace(/^(Orginal|Original)/, "Preview");
-        } else {
-          previewKey = key
-            .replace(/^(Orginal|Original)/, "Preview")
-            .replace(/\.[^/.]+$/, ".jpg");
-        }
+        previewKey = key
+          .replace(/^(Orginal|Original)/, "Preview")
+          .replace(/\.[^/.]+$/, `.${outputExt}`);
       } else {
-        if (isPng || isWebp) {
-          previewKey = `Preview/${key}`;
-        } else {
-          const jpegKey = key.replace(/\.[^/.]+$/, ".jpg");
-          previewKey = `Preview/${jpegKey}`;
-        }
+        const renamedKey = key.replace(/\.[^/.]+$/, `.${outputExt}`);
+        previewKey = `Preview/${renamedKey}`;
       }
 
       // For HEIC files, we need to convert first (using heic-decode library)
@@ -903,7 +897,7 @@ export class ImageProcessor extends WorkerHost {
         contentType = "image/png";
         outputFormat = "png";
       } else {
-        // Convert all formats to WebP for optimal compression and progressive loading
+        // Convert all formats to WebP
         if (isWebp) {
           console.log(`📦 Compressing WebP`);
         } else if (!isJpeg && !isHeic) {
@@ -912,17 +906,14 @@ export class ImageProcessor extends WorkerHost {
           console.log(`🔄 Converting to WebP`);
         }
         sharpTransform = sharpTransform.webp({
-          quality: 70, // Matches JPEG 70 visual quality with 30% smaller file size
-          effort: 6, // Maximum compression effort (automatic progressive loading)
-          smartSubsample: true, // Better quality preservation
+          quality: 70,
+          effort: 6,
+          smartSubsample: true,
           force: true,
         });
         contentType = "image/webp";
         outputFormat = "webp";
-        // Update preview key to .webp extension for non-webp files
-        if (!isWebp && !isPng) {
-          previewKey = previewKey.replace(/\.(jpg|jpeg)$/i, ".webp");
-        }
+        // previewKey already has .webp extension from generation above
       }
 
       // Log upload parameters for debugging
