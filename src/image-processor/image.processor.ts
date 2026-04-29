@@ -819,8 +819,8 @@ export class ImageProcessor extends WorkerHost {
         };
       }
 
-      // Determine output extension: PNG stays PNG, all others become WebP
-      const outputExt = isPng ? "png" : "webp";
+      // Determine output extension: everything becomes WebP for optimal compression
+      const outputExt = "webp";
 
       let previewKey: string;
       let processKey = key;
@@ -882,39 +882,22 @@ export class ImageProcessor extends WorkerHost {
         fastShrinkOnLoad: true,
       });
 
-      // Apply format-specific compression
-      let contentType: string;
-      let outputFormat: string;
+      // Apply WebP compression (optimal for web previews)
+      let contentType = "image/webp";
+      let outputFormat = "webp";
 
-      if (isPng) {
-        console.log(`📦 Compressing PNG`);
-        sharpTransform = sharpTransform.png({
-          quality: 80,
-          compressionLevel: 9, // Maximum compression
-          adaptiveFiltering: true,
-          force: true,
-        });
-        contentType = "image/png";
-        outputFormat = "png";
+      if (isWebp) {
+        console.log(`📦 Compressing WebP`);
       } else {
-        // Convert all formats to WebP
-        if (isWebp) {
-          console.log(`📦 Compressing WebP`);
-        } else if (!isJpeg && !isHeic) {
-          console.log(`🔄 Converting to WebP...`);
-        } else {
-          console.log(`🔄 Converting to WebP`);
-        }
-        sharpTransform = sharpTransform.webp({
-          quality: 70,
-          effort: 6,
-          smartSubsample: true,
-          force: true,
-        });
-        contentType = "image/webp";
-        outputFormat = "webp";
-        // previewKey already has .webp extension from generation above
+        console.log(`🔄 Converting to WebP (${fileExtension} -> webp)`);
       }
+
+      sharpTransform = sharpTransform.webp({
+        quality: 70, // Matches JPEG 70 visual quality with 30% smaller file size
+        effort: 6, // Maximum compression effort (automatic progressive loading)
+        smartSubsample: true, // Better quality preservation
+        force: true,
+      });
 
       // Log upload parameters for debugging
       this.logger.log(`📤 Starting main preview upload`);
