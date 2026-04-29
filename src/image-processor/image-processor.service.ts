@@ -123,8 +123,9 @@ export class ImageProcessorService implements OnModuleDestroy {
         );
       }
 
+      const result = await response.json().catch(() => ({}));
       this.logger.log(
-        `✅ Preview status updated for ${fileKeys.length} file(s)`,
+        `✅ Preview status updated for ${fileKeys.length} file(s). Result: ${JSON.stringify(result)}`,
       );
     } catch (error) {
       for (const key of fileKeys) {
