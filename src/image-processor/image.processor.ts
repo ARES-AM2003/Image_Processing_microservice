@@ -20,7 +20,7 @@ import * as path from "path";
 import { Readable } from "stream";
 const decode = require("heic-decode");
 const execAsync = promisify(exec);
-
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 // Calculate worker concurrency based on CPU cores.
 // We use half the CPU count so each job still gets dedicated threads via Sharp.
 // Minimum 2 for meaningful parallelism, capped at 8 to prevent memory spikes.
@@ -238,18 +238,53 @@ export class ImageProcessor extends WorkerHost {
   onWorkerError(error: Error): void {
     this.logger.error(`Worker error: ${error.message}`);
   }
+  private async getPresignedCdnUrl(
+  bucket: string,
+  key: string,
+): Promise<string> {
+  const signedB2Url = await getSignedUrl(
+    this.s3Client,
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    }),
+    {
+      expiresIn: 60*60*4, // 4 hours - long enough for processing and retries, short enough to limit exposure if leaked
+    },
+  );
 
-  private async getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
-    const result = await this.s3Client.send(
-      new GetObjectCommand({ Bucket: bucket, Key: key }),
+  const parsed = new URL(signedB2Url);
+
+  return `https://cdn.fotosfolio.com${parsed.pathname}${parsed.search}`;
+}
+
+  // private async getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
+  //   const result = await this.s3Client.send(
+  //     new GetObjectCommand({ Bucket: bucket, Key: key }),
+  //   );
+
+  //   if (!result.Body) {
+  //     throw new Error(`Empty S3 body for ${bucket}/${key}`);
+  //   }
+
+  //   return this.bodyToBuffer(result.Body);
+  // }
+  private async getObjectAsBuffer(
+  bucket: string,
+  key: string,
+): Promise<Buffer> {
+  const url = await this.getPresignedCdnUrl(bucket, key);
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch ${bucket}/${key}: ${response.status} ${response.statusText}`,
     );
-
-    if (!result.Body) {
-      throw new Error(`Empty S3 body for ${bucket}/${key}`);
-    }
-
-    return this.bodyToBuffer(result.Body);
   }
+
+  return Buffer.from(await response.arrayBuffer());
+}
 
   private async bodyToBuffer(body: any): Promise<Buffer> {
     if (Buffer.isBuffer(body)) {
