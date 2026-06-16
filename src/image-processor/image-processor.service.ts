@@ -290,8 +290,8 @@ export class ImageProcessorService implements OnModuleDestroy {
         `${beforeCounts.completed} completed, ${beforeCounts.failed} failed, ${beforeCounts.delayed} delayed`,
     );
 
-    // Drain waiting and delayed jobs
-    await this.queue.drain();
+    // Drain waiting, paused, prioritized, and delayed
+    await this.queue.drain(true);
 
     // Remove active jobs by discarding them
     const activeJobs = await this.queue.getActive();
@@ -306,11 +306,17 @@ export class ImageProcessorService implements OnModuleDestroy {
       }
     }
 
-    // Clean up remaining jobs (BullMQ v5 only supports: completed, failed, wait, delayed)
+    // Clean up completed/failed (wait/delayed already handled by drain)
     await this.queue.clean(0, 10000, "completed");
     await this.queue.clean(0, 10000, "failed");
-    await this.queue.clean(0, 10000, "wait");
-    await this.queue.clean(0, 10000, "delayed");
+
+    // Force-obliterate any orphaned job hashes directly via Redis
+    const redis = await this.queue.client as any;
+    const match = this.queue.toKey('') + 'img_*';
+    const stream = redis.scanStream({ match });
+    for await (const keys of stream) {
+      if (keys.length) await redis.del(keys);
+    }
 
     // Get counts after clearing
     const afterCounts = {
