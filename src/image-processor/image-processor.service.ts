@@ -74,8 +74,9 @@ export class ImageProcessorService implements OnModuleInit, OnModuleDestroy {
           parsedReturnValue = undefined;
         }
       }
+      const returnedKey = parsedReturnValue?.originalKey ?? parsedReturnValue?.key;
       this.logger.log(
-        `Job ${jobId} completed — skipped=${parsedReturnValue?.skipped ?? false}, hasPreview=${!!parsedReturnValue?.previewKey}, workerSchema=${parsedReturnValue?.workerSchema ?? "missing"}`,
+        `Job ${jobId} completed — skipped=${parsedReturnValue?.skipped ?? false}, hasPreview=${!!parsedReturnValue?.previewKey}, workerSchema=${parsedReturnValue?.workerSchema ?? "missing"}, key=${returnedKey ?? "missing"}`,
       );
       await this.onJobCompleted(jobId, parsedReturnValue);
     });
@@ -126,7 +127,7 @@ export class ImageProcessorService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Priority 1: worker returned originalKey in its return value (already parsed)
-      let fileKey: string | undefined = returnvalue?.originalKey;
+      let fileKey: string | undefined = returnvalue?.originalKey ?? returnvalue?.key;
 
       // Priority 2: in-memory map registered at enqueue time (works even after removeOnComplete)
       if (!fileKey) {

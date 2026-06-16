@@ -65,6 +65,13 @@ export class ImageProcessor extends WorkerHost {
     };
   }
 
+  private derivePreviewKey(originalKey: string): string {
+    const extensionStart = originalKey.lastIndexOf(".");
+    const withoutExtension =
+      extensionStart >= 0 ? originalKey.slice(0, extensionStart) : originalKey;
+    return withoutExtension.replace(/^(Orginal|Original)(?=\/|$)/, "Preview") + ".webp";
+  }
+
   private maskSecret(value: string | undefined): string {
     if (!value) {
       return "<missing>";
@@ -861,9 +868,8 @@ export class ImageProcessor extends WorkerHost {
       // run already generated the preview. One cheap HeadObject call avoids a full
       // download + re-encode + re-upload cycle, and surfaces a proper reason so the
       // service never logs "reason: unknown".
-      const previewKeyEarly = key
-        .replace(/\.[^/.]+$/, ".webp")
-        .replace(/^(Orginal|Original)/, "Preview");
+      const previewKeyEarly = this.derivePreviewKey(key);
+      this.logger.log(`🔑 Key mapping: ${key} -> ${previewKeyEarly}`);
 
       const previewAlreadyExists = await this.fileExists(bucket, previewKeyEarly);
       if (previewAlreadyExists) {
@@ -923,9 +929,7 @@ export class ImageProcessor extends WorkerHost {
       const isHeic = this.isHeicFormat(key);
 
       // Everything becomes WebP for optimal web compression
-      const previewKey = key
-        .replace(/\.[^/.]+$/, ".webp")
-        .replace(/^(Orginal|Original)/, "Preview");
+      const previewKey = this.derivePreviewKey(key);
 
       let processKey = key;
 
@@ -1047,10 +1051,7 @@ export class ImageProcessor extends WorkerHost {
   }
 
   private generatePreviewKey(originalKey: string): string {
-    const pathParts = originalKey.split("/");
-    const fileName = pathParts.pop();
-    const [name, ext] = fileName.split(".");
-    return `${pathParts.join("/")}/${name}_preview.${ext}`;
+    return this.derivePreviewKey(originalKey);
   }
 
   private async simulateImageProcessing(key: string): Promise<void> {
