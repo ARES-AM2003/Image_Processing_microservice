@@ -96,17 +96,26 @@ export class ImageProcessorService implements OnModuleInit, OnModuleDestroy {
       this.jobIdToFileKey.delete(jobId);
 
       // ─── GUARD: only update preview status when a real preview was generated ───
-      // Jobs that are skipped (non-image, RAW, corrupted HEIC, etc.) return
-      // { skipped: true } — we must NOT mark those as preview-ready.
-      // Jobs that actually produced a preview always return { previewKey, originalKey }.
+      // Jobs skipped for "real" reasons (non-image, RAW, corrupted HEIC) have no
+      // preview and must NOT trigger a status update.
+      // Exception: "Preview already exists" means S3 already has the preview —
+      // we SHOULD mark it ready so the frontend reflects the correct state.
       if (returnvalue?.skipped === true) {
+        const reason = returnvalue?.reason ?? "unknown";
+        if (reason !== "Preview already exists") {
+          this.logger.log(
+            `Job ${jobId} was skipped (reason: ${reason}) — no preview status update`,
+          );
+          return;
+        }
+        // Fall through: treat "Preview already exists" the same as a successful job
         this.logger.log(
-          `Job ${jobId} was skipped (reason: ${returnvalue?.reason ?? "unknown"}) — no preview status update`,
+          `Job ${jobId} skipped — preview already existed in S3, queueing status update`,
         );
-        return;
       }
 
-      // Also require that a previewKey was actually produced and S3-verified
+      // Require that a previewKey was produced (either by the worker or returned
+      // from the early-exit "Preview already exists" skip path)
       if (!returnvalue?.previewKey) {
         this.logger.warn(
           `Job ${jobId} completed but returned no previewKey — skipping status update. returnvalue=${JSON.stringify(returnvalue)}`,

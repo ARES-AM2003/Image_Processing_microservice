@@ -847,6 +847,27 @@ export class ImageProcessor extends WorkerHost {
     const startMemory = process.memoryUsage();
 
     try {
+      // Step 1: Short-circuit if preview already exists in S3.
+      // This is the most common skip path for re-submitted batches where a prior
+      // run already generated the preview. One cheap HeadObject call avoids a full
+      // download + re-encode + re-upload cycle, and surfaces a proper reason so the
+      // service never logs "reason: unknown".
+      const previewKeyEarly = key
+        .replace(/\.[^/.]+$/, ".webp")
+        .replace(/^(Orginal|Original)/, "Preview");
+
+      const previewAlreadyExists = await this.fileExists(bucket, previewKeyEarly);
+      if (previewAlreadyExists) {
+        console.log(`⏭️  Skipping — preview already exists at ${previewKeyEarly}`);
+        this.skippedCount++;
+        return {
+          skipped: true,
+          reason: "Preview already exists",
+          previewKey: previewKeyEarly, // include so service can still mark it ready if needed
+          originalKey: key,
+        };
+      }
+
       // Step 2: Check if file is an image by content type / extension
       const isImage = await this.isImageFile(bucket, key);
       if (!isImage) {
