@@ -383,6 +383,15 @@ export class ImageProcessorService implements OnModuleDestroy {
     const providedBucket = bucket?.trim();
     const configuredBucket = process.env.S3_BUCKET_NAME?.trim();
 
+    if (configuredBucket) {
+      if (providedBucket && providedBucket !== configuredBucket) {
+        this.logger.warn(
+          `Ignoring request bucket ${providedBucket} and using configured S3 bucket ${configuredBucket}`,
+        );
+      }
+      return configuredBucket;
+    }
+
     const isPlaceholderBucket =
       !providedBucket ||
       /^YOUR_BUCKET_NAME$/i.test(providedBucket) ||
@@ -390,14 +399,10 @@ export class ImageProcessorService implements OnModuleDestroy {
       /^<.*>$/.test(providedBucket);
 
     if (!isPlaceholderBucket) {
-      return providedBucket;
-    }
-
-    if (configuredBucket) {
       this.logger.warn(
-        `Using configured S3 bucket ${configuredBucket} because request bucket was missing or a placeholder`,
+        `S3_BUCKET_NAME is not set; falling back to request bucket ${providedBucket}`,
       );
-      return configuredBucket;
+      return providedBucket;
     }
 
     throw new Error(

@@ -108,6 +108,7 @@ export class ImageQueueService implements OnModuleInit, OnModuleDestroy {
    */
   async addImageJob(bucket: string, key: string): Promise<any> {
     try {
+      bucket = this.resolveBucket(bucket);
       return await this.queue.add(
         "generate-preview",
         { bucket, key },
@@ -134,6 +135,7 @@ export class ImageQueueService implements OnModuleInit, OnModuleDestroy {
     keys: string[],
     customBatchSize?: number,
   ): Promise<void> {
+    bucket = this.resolveBucket(bucket);
     const startTime = Date.now();
     const uniqueKeys = [...new Set(keys)];
     const batchSize =
@@ -261,6 +263,29 @@ export class ImageQueueService implements OnModuleInit, OnModuleDestroy {
         await this.processBatchUpdates();
       }
     }, this.BATCH_UPDATE_INTERVAL);
+  }
+
+  private resolveBucket(bucket: string): string {
+    const providedBucket = bucket?.trim();
+    const configuredBucket = process.env.S3_BUCKET_NAME?.trim();
+
+    if (configuredBucket) {
+      if (providedBucket && providedBucket !== configuredBucket) {
+        this.logger.warn(
+          `Ignoring request bucket ${providedBucket} and using configured S3 bucket ${configuredBucket}`,
+        );
+      }
+      return configuredBucket;
+    }
+
+    if (providedBucket) {
+      this.logger.warn(
+        `S3_BUCKET_NAME is not set; falling back to request bucket ${providedBucket}`,
+      );
+      return providedBucket;
+    }
+
+    throw new Error("S3 bucket is required. Set S3_BUCKET_NAME in environment.");
   }
 
   /**
