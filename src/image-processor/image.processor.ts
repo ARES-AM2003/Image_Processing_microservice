@@ -238,29 +238,29 @@ export class ImageProcessor extends WorkerHost {
   onWorkerError(error: Error): void {
     this.logger.error(`Worker error: ${error.message}`);
   }
- private async getPresignedCdnUrl(
-  bucket: string,
-  key: string,
-): Promise<string> {
-  const signedUrl = await getSignedUrl(
-    this.s3Client,
-    new GetObjectCommand({
-      Bucket: bucket,
-      Key: key,
-    }),
-    {
-      expiresIn: 60 * 60 * 4,
-    },
-  );
+  private async getPresignedCdnUrl(
+    bucket: string,
+    key: string,
+  ): Promise<string> {
+    const signedUrl = await getSignedUrl(
+      this.s3Client,
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      }),
+      {
+        expiresIn: 60 * 60 * 4,
+      },
+    );
 
-  const endpoint = (process.env.S3_ENDPOINT || '').replace(/\/$/, '');
+    const endpoint = (process.env.S3_ENDPOINT || '').replace(/\/$/, '');
 
-  if (signedUrl.startsWith(endpoint)) {
-    return `https://cdn.fotosfolio.com${signedUrl.slice(endpoint.length)}`;
+    if (signedUrl.startsWith(endpoint)) {
+      return `https://cdn.fotosfolio.com${signedUrl.slice(endpoint.length)}`;
+    }
+
+    return signedUrl;
   }
-
-  return signedUrl;
-}
 
   // private async getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
   //   const result = await this.s3Client.send(
@@ -278,7 +278,7 @@ export class ImageProcessor extends WorkerHost {
     key: string,
   ): Promise<Buffer> {
     const url = await this.getPresignedCdnUrl(bucket, key);
-
+    this.logger.error(`FETCH URL: ${url}`);
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -286,6 +286,7 @@ export class ImageProcessor extends WorkerHost {
         `Failed to fetch ${bucket}/${key}: ${response.status} ${response.statusText}`,
       );
     }
+
 
     return Buffer.from(await response.arrayBuffer());
   }
