@@ -255,7 +255,8 @@ export class ImageProcessor extends WorkerHost {
 
   const parsed = new URL(signedB2Url);
 
-  return `https://cdn.fotosfolio.com${parsed.pathname}${parsed.search}`;
+  // return `https://cdn.fotosfolio.com${parsed.pathname}${parsed.search}`;
+  return signedB2Url; // Use the signed URL directly for now, as the CDN may not be configured for all buckets
 }
 
   // private async getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
