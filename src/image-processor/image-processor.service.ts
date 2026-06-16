@@ -290,32 +290,27 @@ export class ImageProcessorService implements OnModuleDestroy {
         `${beforeCounts.completed} completed, ${beforeCounts.failed} failed, ${beforeCounts.delayed} delayed`,
     );
 
-    // Get all active jobs and fail them immediately
-    const activeJobs = await this.queue.getActive();
-    this.logger.log(`🛑 Stopping ${activeJobs.length} active jobs...`);
-
-    for (const job of activeJobs) {
-      try {
-        // We cannot reliably call moveToFailed without the lock token held by the worker.
-        // Instead, we log that it's being cancelled and the worker will pick up the paused state
-        // or we rely on clean() to remove it once the lock expires if the worker is dead.
-        this.logger.debug(`  🛑 Active job ${job.id} cannot be forcibly stopped safely without lock token`);
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`  ⚠️  Error handling active job ${job.id}: ${errorMessage}`);
-      }
-    }
-
     // Drain waiting and delayed jobs
     await this.queue.drain();
 
-    // Clean up all job types with increased limits
+    // Remove active jobs by discarding them
+    const activeJobs = await this.queue.getActive();
+    this.logger.log(`🛑 Stopping ${activeJobs.length} active jobs...`);
+    for (const job of activeJobs) {
+      try {
+        await job.discard();
+        await job.remove();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`  ⚠️  Error stopping active job ${job.id}: ${errorMessage}`);
+      }
+    }
+
+    // Clean up remaining jobs (BullMQ v5 only supports: completed, failed, wait, delayed)
     await this.queue.clean(0, 10000, "completed");
     await this.queue.clean(0, 10000, "failed");
-    await this.queue.clean(0, 10000, "active");
     await this.queue.clean(0, 10000, "wait");
     await this.queue.clean(0, 10000, "delayed");
-    await this.queue.clean(0, 10000, "paused");
 
     // Get counts after clearing
     const afterCounts = {
