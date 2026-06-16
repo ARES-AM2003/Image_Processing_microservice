@@ -238,29 +238,31 @@ export class ImageProcessor extends WorkerHost {
   onWorkerError(error: Error): void {
     this.logger.error(`Worker error: ${error.message}`);
   }
-  private async getPresignedCdnUrl(
-    bucket: string,
-    key: string,
-  ): Promise<string> {
-    const signedUrl = await getSignedUrl(
-      this.s3Client,
-      new GetObjectCommand({
-        Bucket: bucket,
-        Key: key,
-      }),
-      {
-        expiresIn: 60 * 60 * 4,
-      },
-    );
+ private async getPresignedCdnUrl(
+  bucket: string,
+  key: string,
+): Promise<string> {
+  const signedUrl = await getSignedUrl(
+    this.s3Client,
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    }),
+    {
+      expiresIn: 60 * 60 * 4,
+    },
+  );
 
-    const endpoint = (process.env.S3_ENDPOINT || '').replace(/\/$/, '');
+  const parsed = new URL(signedUrl);
 
-    if (signedUrl.startsWith(endpoint)) {
-      return `https://cdn.fotosfolio.com${signedUrl.slice(endpoint.length)}`;
-    }
+  const bucketPrefix = `/${bucket}`;
 
-    return signedUrl;
-  }
+  const path = parsed.pathname.startsWith(bucketPrefix)
+    ? parsed.pathname.slice(bucketPrefix.length)
+    : parsed.pathname;
+
+  return `https://cdn.fotosfolio.com${path}${parsed.search}`;
+}
 
   // private async getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
   //   const result = await this.s3Client.send(
