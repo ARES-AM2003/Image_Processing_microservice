@@ -238,25 +238,28 @@ export class ImageProcessor extends WorkerHost {
   onWorkerError(error: Error): void {
     this.logger.error(`Worker error: ${error.message}`);
   }
-  private async getPresignedCdnUrl(
+ private async getPresignedCdnUrl(
   bucket: string,
   key: string,
 ): Promise<string> {
-  const signedB2Url = await getSignedUrl(
+  const signedUrl = await getSignedUrl(
     this.s3Client,
     new GetObjectCommand({
       Bucket: bucket,
       Key: key,
     }),
     {
-      expiresIn: 60*60*4, // 4 hours - long enough for processing and retries, short enough to limit exposure if leaked
+      expiresIn: 60 * 60 * 4,
     },
   );
 
-  const parsed = new URL(signedB2Url);
+  const endpoint = (process.env.S3_ENDPOINT || '').replace(/\/$/, '');
 
-  // return `https://cdn.fotosfolio.com${parsed.pathname}${parsed.search}`;
-  return signedB2Url; // Use the signed URL directly for now, as the CDN may not be configured for all buckets
+  if (signedUrl.startsWith(endpoint)) {
+    return `https://cdn.fotosfolio.com${signedUrl.slice(endpoint.length)}`;
+  }
+
+  return signedUrl;
 }
 
   // private async getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
@@ -271,21 +274,21 @@ export class ImageProcessor extends WorkerHost {
   //   return this.bodyToBuffer(result.Body);
   // }
   private async getObjectAsBuffer(
-  bucket: string,
-  key: string,
-): Promise<Buffer> {
-  const url = await this.getPresignedCdnUrl(bucket, key);
+    bucket: string,
+    key: string,
+  ): Promise<Buffer> {
+    const url = await this.getPresignedCdnUrl(bucket, key);
 
-  const response = await fetch(url);
+    const response = await fetch(url);
 
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch ${bucket}/${key}: ${response.status} ${response.statusText}`,
-    );
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch ${bucket}/${key}: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    return Buffer.from(await response.arrayBuffer());
   }
-
-  return Buffer.from(await response.arrayBuffer());
-}
 
   private async bodyToBuffer(body: any): Promise<Buffer> {
     if (Buffer.isBuffer(body)) {
@@ -322,7 +325,7 @@ export class ImageProcessor extends WorkerHost {
       );
 
       const contentType = headObject.ContentType || "";
-      
+
       // If ContentType is set and is an image, return true
       if (contentType && contentType.startsWith("image/")) {
         console.log(`✅ Image file detected by content type: ${contentType}`);
@@ -333,11 +336,11 @@ export class ImageProcessor extends WorkerHost {
       console.log(`⏭️  ContentType missing or not image (${contentType || "empty"}), checking extension...`);
       const extension = key.split(".").pop()?.toLowerCase();
       const isSupported = extension ? this.supportedImageFormats.includes(extension) : false;
-      
+
       if (!isSupported) {
         console.log(`⏭️  Non-image file detected (extension: ${extension || "unknown"})`);
       }
-      
+
       return isSupported;
     } catch (error) {
       // Check if it's a 404 - file doesn't exist
@@ -351,11 +354,11 @@ export class ImageProcessor extends WorkerHost {
       console.warn(`⚠️  HeadObject failed for ${key}: ${(error as any).message}. Falling back to extension check.`);
       const extension = key.split(".").pop()?.toLowerCase();
       const isSupported = extension ? this.supportedImageFormats.includes(extension) : false;
-      
+
       if (!isSupported) {
         console.log(`⏭️  File extension not supported: ${extension || "unknown"}`);
       }
-      
+
       return isSupported;
     }
   }
