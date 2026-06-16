@@ -28,8 +28,7 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: blueneontech/imageprocessor:v1
-          cache-from: type=registry,ref=blueneontech/imageprocessor:buildcache
-          cache-to: type=registry,ref=blueneontech/imageprocessor:buildcache,mode=max
+          no-cache: true
           platforms: linux/amd64
 
   deploy:
@@ -46,12 +45,15 @@ jobs:
             echo "🔐 Logging in to Docker Hub..."
             docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
 
-            echo "⬇️  Pulling latest image..."
-            docker pull blueneontech/imageprocessor:v1
-
             echo "🛑 Stopping existing container..."
             docker stop image-processor || true
             docker rm image-processor || true
+
+            echo "🗑️  Removing old image..."
+            docker rmi blueneontech/imageprocessor:v1 || true
+
+            echo "⬇️  Pulling latest image..."
+            docker pull blueneontech/imageprocessor:v1
 
             echo "🚀 Starting new container..."
             docker run -d \
