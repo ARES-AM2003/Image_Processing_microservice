@@ -1,10 +1,15 @@
-import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue, QueueEvents } from "bullmq";
 import { createHash } from "crypto";
 
 @Injectable()
-export class ImageProcessorService implements OnModuleDestroy {
+export class ImageProcessorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ImageProcessorService.name);
   private queueEvents: QueueEvents;
   private readonly maxQueuedJobs = Number(
@@ -20,7 +25,11 @@ export class ImageProcessorService implements OnModuleDestroy {
     process.env.PREVIEW_STATUS_PATH || "/uploads/bulk/preview-status";
   private readonly previewStatusBatchSize = Math.max(
     1,
-    Number(process.env.PREVIEW_STATUS_BATCH_SIZE || process.env.BATCH_SIZE || 20),
+    Number(
+      process.env.PREVIEW_STATUS_BATCH_SIZE ||
+        process.env.BATCH_SIZE ||
+        20,
+    ),
   );
   private readonly previewStatusFlushIntervalMs = Number(
     process.env.PREVIEW_STATUS_FLUSH_INTERVAL_MS || 5000,
@@ -44,6 +53,13 @@ export class ImageProcessorService implements OnModuleDestroy {
     this.registerEventListeners();
   }
 
+  // ─── FIX 1: Clear all stale jobs from Redis on startup ───────────────────────
+  async onModuleInit() {
+    this.logger.log("🚀 Module init: clearing stale queue state from Redis...");
+    await this.obliterateQueueKeys();
+    this.logger.log("✅ Queue state cleared on startup.");
+  }
+
   onModuleDestroy() {
     clearInterval(this.previewStatusFlushTimer);
   }
@@ -63,7 +79,10 @@ export class ImageProcessorService implements OnModuleDestroy {
     });
   }
 
-  private async onJobCompleted(jobId: string, returnvalue?: any): Promise<void> {
+  private async onJobCompleted(
+    jobId: string,
+    returnvalue?: any,
+  ): Promise<void> {
     try {
       let fileKey = returnvalue?.originalKey;
 
@@ -73,17 +92,22 @@ export class ImageProcessorService implements OnModuleDestroy {
       }
 
       if (!fileKey || typeof fileKey !== "string") {
-        this.logger.warn(`Could not find file key for completed job ${jobId}`);
+        this.logger.warn(
+          `Could not find file key for completed job ${jobId}`,
+        );
         return;
       }
 
       this.pendingPreviewStatusKeys.set(fileKey, 0);
 
-      if (this.pendingPreviewStatusKeys.size >= this.previewStatusBatchSize) {
+      if (
+        this.pendingPreviewStatusKeys.size >= this.previewStatusBatchSize
+      ) {
         await this.flushPreviewStatusBatch();
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       this.logger.warn(
         `Failed to prepare preview status update for job ${jobId}: ${errorMessage}`,
       );
@@ -101,12 +125,13 @@ export class ImageProcessorService implements OnModuleDestroy {
 
     this.previewStatusFlushInProgress = true;
 
-    const fileKeys = Array.from(this.pendingPreviewStatusKeys.keys()).slice(
-      0,
-      this.previewStatusBatchSize,
-    );
+    const fileKeys = Array.from(
+      this.pendingPreviewStatusKeys.keys(),
+    ).slice(0, this.previewStatusBatchSize);
 
-    this.logger.log(`🔄 Flushing preview status for ${fileKeys.length} file(s)...`);
+    this.logger.log(
+      `🔄 Flushing preview status for ${fileKeys.length} file(s)...`,
+    );
 
     for (const key of fileKeys) {
       this.pendingPreviewStatusKeys.delete(key);
@@ -117,9 +142,7 @@ export class ImageProcessorService implements OnModuleDestroy {
         `${this.previewStatusBaseUrl}${this.previewStatusPath}`,
         {
           method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fileKeys }),
         },
       );
@@ -136,9 +159,11 @@ export class ImageProcessorService implements OnModuleDestroy {
         `✅ Preview status updated for ${fileKeys.length} file(s). Result: ${JSON.stringify(result)}`,
       );
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       for (const key of fileKeys) {
-        const retryCount = (this.pendingPreviewStatusKeys.get(key) || 0) + 1;
+        const retryCount =
+          (this.pendingPreviewStatusKeys.get(key) || 0) + 1;
         if (retryCount <= 3) {
           this.pendingPreviewStatusKeys.set(key, retryCount);
           this.logger.warn(
@@ -164,7 +189,11 @@ export class ImageProcessorService implements OnModuleDestroy {
       "generate-preview",
       { bucket, key },
       {
-        jobId: this.buildDeterministicJobId("generate-preview", bucket, key),
+        jobId: this.buildDeterministicJobId(
+          "generate-preview",
+          bucket,
+          key,
+        ),
         attempts: 1,
         backoff: { type: "exponential", delay: 2000 },
         removeOnComplete: true,
@@ -176,7 +205,9 @@ export class ImageProcessorService implements OnModuleDestroy {
   async addImageJobsBatch(
     bucket: string,
     keys: string[],
-    batchSize = Number(process.env.BATCH_SIZE || this.enqueueChunkSize),
+    batchSize = Number(
+      process.env.BATCH_SIZE || this.enqueueChunkSize,
+    ),
   ) {
     bucket = this.resolveBucket(bucket);
     const startTime = Date.now();
@@ -184,16 +215,23 @@ export class ImageProcessorService implements OnModuleDestroy {
 
     const existingChecks = await Promise.all(
       uniqueKeys.map(async (key) => {
-        const jobId = this.buildDeterministicJobId("generate-preview", bucket, key);
+        const jobId = this.buildDeterministicJobId(
+          "generate-preview",
+          bucket,
+          key,
+        );
         const existingJob = await this.queue.getJob(jobId);
-        
-        // Only skip if the job is actually waiting, active, or delayed - allowing retry of failed/completed jobs
+
         let isActiveOrWaiting = false;
         if (existingJob) {
           const state = await existingJob.getState();
-          isActiveOrWaiting = state === "waiting" || state === "active" || state === "delayed" || state === "prioritized";
+          isActiveOrWaiting =
+            state === "waiting" ||
+            state === "active" ||
+            state === "delayed" ||
+            state === "prioritized";
         }
-        
+
         return { key, jobId, exists: isActiveOrWaiting };
       }),
     );
@@ -205,7 +243,6 @@ export class ImageProcessorService implements OnModuleDestroy {
 
     await this.ensureQueueCapacity(keysToEnqueue.length);
 
-    // Skip logging for very large batches to avoid overhead
     if (uniqueKeys.length < 1000) {
       this.logger.log(
         `📦 Enqueue request: ${uniqueKeys.length} unique keys ` +
@@ -214,24 +251,31 @@ export class ImageProcessorService implements OnModuleDestroy {
     }
 
     if (keysToEnqueue.length === 0) {
-      this.logger.log(`⏭️ No new jobs to enqueue (all keys already exist in queue)`);
+      this.logger.log(
+        `⏭️ No new jobs to enqueue (all keys already exist in queue)`,
+      );
       return;
     }
 
-    // Use single bulk operation for all sizes - much faster
     const jobs = keysToEnqueue.map((key) => ({
       name: "generate-preview",
       data: { bucket, key },
       opts: {
-        jobId: this.buildDeterministicJobId("generate-preview", bucket, key),
+        jobId: this.buildDeterministicJobId(
+          "generate-preview",
+          bucket,
+          key,
+        ),
         attempts: 1,
         removeOnComplete: true,
         removeOnFail: true,
       },
     }));
 
-    // Chunked bulk operations to avoid large Redis Lua allocations.
-    const chunkSize = Math.max(1, Math.min(batchSize, this.enqueueChunkSize));
+    const chunkSize = Math.max(
+      1,
+      Math.min(batchSize, this.enqueueChunkSize),
+    );
     for (let i = 0; i < jobs.length; i += chunkSize) {
       await this.queue.addBulk(jobs.slice(i, i + chunkSize));
     }
@@ -264,7 +308,11 @@ export class ImageProcessorService implements OnModuleDestroy {
       "test-heic-conversion",
       { bucket, key },
       {
-        jobId: this.buildDeterministicJobId("test-heic-conversion", bucket, key),
+        jobId: this.buildDeterministicJobId(
+          "test-heic-conversion",
+          bucket,
+          key,
+        ),
         attempts: 1,
         removeOnComplete: true,
         removeOnFail: true,
@@ -276,7 +324,6 @@ export class ImageProcessorService implements OnModuleDestroy {
     this.logger.log("🧹 Clearing queue and stopping all jobs...");
     const startTime = Date.now();
 
-    // Get counts before clearing
     const beforeCounts = {
       waiting: await this.queue.getWaitingCount(),
       active: await this.queue.getActiveCount(),
@@ -293,7 +340,7 @@ export class ImageProcessorService implements OnModuleDestroy {
     // Drain waiting, paused, prioritized, and delayed
     await this.queue.drain(true);
 
-    // Remove active jobs by discarding them
+    // Remove active jobs
     const activeJobs = await this.queue.getActive();
     this.logger.log(`🛑 Stopping ${activeJobs.length} active jobs...`);
     for (const job of activeJobs) {
@@ -301,24 +348,20 @@ export class ImageProcessorService implements OnModuleDestroy {
         await job.discard();
         await job.remove();
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`  ⚠️  Error stopping active job ${job.id}: ${errorMessage}`);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `  ⚠️  Error stopping active job ${job.id}: ${errorMessage}`,
+        );
       }
     }
 
-    // Clean up completed/failed (wait/delayed already handled by drain)
     await this.queue.clean(0, 10000, "completed");
     await this.queue.clean(0, 10000, "failed");
 
-    // Force-obliterate any orphaned job hashes directly via Redis
-    const redis = await this.queue.client as any;
-    const match = this.queue.toKey('') + 'img_*';
-    const stream = redis.scanStream({ match });
-    for await (const keys of stream) {
-      if (keys.length) await redis.del(keys);
-    }
+    // ─── FIX 2: Correctly obliterate all img_* job hashes from Redis ─────────
+    await this.obliterateQueueKeys();
 
-    // Get counts after clearing
     const afterCounts = {
       waiting: await this.queue.getWaitingCount(),
       active: await this.queue.getActiveCount(),
@@ -354,6 +397,60 @@ export class ImageProcessorService implements OnModuleDestroy {
     };
   }
 
+  /**
+   * Scans and deletes all img_* job hash keys directly in Redis.
+   *
+   * The old code used `this.queue.toKey('') + 'img_*'` which produced a
+   * pattern like `bull:image-processing:img_*` — correct in structure but
+   * `queue.client` is a Promise<Redis>, not a raw client, so the scanStream
+   * call silently failed. This version awaits the client properly.
+   */
+  private async obliterateQueueKeys(): Promise<void> {
+    try {
+      // queue.client returns Promise<Redis> in bullmq v3+
+      const redis = await (this.queue.client as Promise<any>);
+
+      // BullMQ key prefix: "bull:<queueName>:<jobId>"
+      // toKey('') => "bull:image-processing:"
+      const prefix = this.queue.toKey("img_");   // "bull:image-processing:img_"
+      const pattern = `${prefix}*`;
+
+      this.logger.log(`🔍 Scanning Redis for keys matching: ${pattern}`);
+
+      let deletedCount = 0;
+      const stream = redis.scanStream({ match: pattern, count: 200 });
+
+      await new Promise<void>((resolve, reject) => {
+        stream.on("data", async (keys: string[]) => {
+          if (keys.length) {
+            stream.pause();
+            try {
+              await redis.del(...keys);
+              deletedCount += keys.length;
+            } catch (e) {
+              // log but don't abort the scan
+              this.logger.warn(`Error deleting keys batch: ${e}`);
+            } finally {
+              stream.resume();
+            }
+          }
+        });
+        stream.on("end", resolve);
+        stream.on("error", reject);
+      });
+
+      this.logger.log(
+        `🗑️  Obliterated ${deletedCount} orphaned Redis key(s) matching ${pattern}`,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to obliterate Redis keys: ${errorMessage}`,
+      );
+    }
+  }
+
   private async ensureQueueCapacity(incomingJobs: number): Promise<void> {
     const [waiting, delayed, prioritized] = await Promise.all([
       this.queue.getWaitingCount(),
@@ -373,7 +470,11 @@ export class ImageProcessorService implements OnModuleDestroy {
     }
   }
 
-  private buildDeterministicJobId(jobName: string, bucket: string, key: string): string {
+  private buildDeterministicJobId(
+    jobName: string,
+    bucket: string,
+    key: string,
+  ): string {
     const hash = createHash("sha256")
       .update(`${jobName}:${bucket}:${key}`)
       .digest("hex");
