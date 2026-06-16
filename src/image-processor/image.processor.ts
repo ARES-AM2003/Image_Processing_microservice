@@ -198,18 +198,41 @@ export class ImageProcessor extends WorkerHost {
       );
 
       const contentType = headObject.ContentType || "";
-      const isImage = contentType.startsWith("image/");
-
-      // Minimal logging for production
-      if (!isImage) {
-        console.log(`⏭️  Non-image file detected`);
+      
+      // If ContentType is set and is an image, return true
+      if (contentType && contentType.startsWith("image/")) {
+        console.log(`✅ Image file detected by content type: ${contentType}`);
+        return true;
       }
 
-      return isImage;
-    } catch (error) {
-      // Silent fallback to extension check for performance
+      // ContentType not set or not an image - fall back to extension check
+      console.log(`⏭️  ContentType missing or not image (${contentType || "empty"}), checking extension...`);
       const extension = key.split(".").pop()?.toLowerCase();
-      return extension ? this.supportedImageFormats.includes(extension) : false;
+      const isSupported = extension ? this.supportedImageFormats.includes(extension) : false;
+      
+      if (!isSupported) {
+        console.log(`⏭️  Non-image file detected (extension: ${extension || "unknown"})`);
+      }
+      
+      return isSupported;
+    } catch (error) {
+      // Check if it's a 404 - file doesn't exist
+      const awsError = error as any;
+      if (awsError?.name === "NotFound" || awsError?.$metadata?.httpStatusCode === 404) {
+        console.error(`❌ File not found in S3: ${bucket}/${key}`);
+        throw new Error(`File not found in S3`);
+      }
+
+      // For other errors (permission issues, network issues, etc.), fall back to extension check
+      console.warn(`⚠️  HeadObject failed for ${key}: ${(error as any).message}. Falling back to extension check.`);
+      const extension = key.split(".").pop()?.toLowerCase();
+      const isSupported = extension ? this.supportedImageFormats.includes(extension) : false;
+      
+      if (!isSupported) {
+        console.log(`⏭️  File extension not supported: ${extension || "unknown"}`);
+      }
+      
+      return isSupported;
     }
   }
 
@@ -256,11 +279,11 @@ export class ImageProcessor extends WorkerHost {
         message: "HEIC/HEIF conversion test completed successfully",
       };
     } catch (error) {
-      console.error(`❌ HEIC/HEIF conversion test failed:`, error.message);
+      console.error(`❌ HEIC/HEIF conversion test failed:`, (error as any).message);
       return {
         success: false,
         originalKey: key,
-        error: error.message,
+        error: (error as any).message,
         message: "HEIC/HEIF conversion test failed",
       };
     }
@@ -346,7 +369,7 @@ export class ImageProcessor extends WorkerHost {
       }
 
       // Check if it's a corruption error that we should skip gracefully
-      const errorMessage = error.message || "";
+      const errorMessage = (error as any).message || "";
       if (
         errorMessage.includes("bad seek") ||
         errorMessage.includes("Unexpected end of file") ||
@@ -361,9 +384,9 @@ export class ImageProcessor extends WorkerHost {
         return false;
       }
 
-      console.warn(`❌ HEIC/HEIF validation failed: ${error.message}`);
-      console.warn(`   Error code: ${error.code || "unknown"}`);
-      console.warn(`   Error stack: ${error.stack?.split("\n")[0] || "N/A"}`);
+      console.warn(`❌ HEIC/HEIF validation failed: ${(error as any).message}`);
+      console.warn(`   Error code: ${(error as any).code || "unknown"}`);
+      console.warn(`   Error stack: ${(error as any).stack?.split("\n")[0] || "N/A"}`);
       return false;
     }
   }
@@ -452,7 +475,7 @@ export class ImageProcessor extends WorkerHost {
         // For RAW formats, we're more permissive as they may not be fully supported
         return true;
       } else {
-        console.warn(`❌ Failed to validate image content: ${error.message}`);
+        console.warn(`❌ Failed to validate image content: ${(error as any).message}`);
         // For standard formats, fall back to extension check
         return true;
       }
@@ -481,12 +504,12 @@ export class ImageProcessor extends WorkerHost {
       }
 
       console.error(`❌ Error getting file size:`, {
-        code: error.code,
-        statusCode: error.statusCode,
-        message: error.message,
+        code: (error as any).code,
+        statusCode: (error as any).statusCode,
+        message: (error as any).message,
         bucket: bucket,
       });
-      throw new Error(`Failed to get file size: ${error.message}`);
+      throw new Error(`Failed to get file size: ${(error as any).message}`);
     }
   }
 
@@ -551,7 +574,7 @@ export class ImageProcessor extends WorkerHost {
           })
           .toBuffer();
       } catch (heicDecodeError) {
-        console.warn(`⚠️  heic-decode failed: ${heicDecodeError.message}`);
+        console.warn(`⚠️  heic-decode failed: ${(heicDecodeError as any).message}`);
         console.log(`🔄 Falling back to Sharp for HEIC conversion...`);
 
         try {
@@ -577,10 +600,10 @@ export class ImageProcessor extends WorkerHost {
             .toBuffer();
         } catch (sharpError) {
           console.error(`❌ Both heic-decode and Sharp failed`);
-          console.error(`   heic-decode error: ${heicDecodeError.message}`);
-          console.error(`   Sharp error: ${sharpError.message}`);
+          console.error(`   heic-decode error: ${(heicDecodeError as any).message}`);
+          console.error(`   Sharp error: ${(sharpError as any).message}`);
           throw new Error(
-            `Both HEIC conversion methods failed: heic-decode (${heicDecodeError.message}) and Sharp (${sharpError.message})`,
+            `Both HEIC conversion methods failed: heic-decode (${(heicDecodeError as any).message}) and Sharp (${(sharpError as any).message})`,
           );
         }
       }
@@ -638,12 +661,13 @@ export class ImageProcessor extends WorkerHost {
     } catch (error) {
       const conversionTime = Date.now() - startTime;
       console.error(
-        `❌ Failed to convert HEIC/HEIF to WebP after ${conversionTime}ms:`,
-        error.message,
+          `❌ Failed to convert HEIC/HEIF to WebP after ${conversionTime}ms:`,
+          (error as any).message,
       );
-      console.error(`   Error code: ${error.code || "unknown"}`);
+        console.error(`   Error code: ${(error as any).code || "unknown"}`);
       console.error(
-        `   Error details: ${error.stack?.split("\n")[0] || "N/A"}`,
+        `   Error details: ${(error as any).stack?.split("\n")[0] || "N/A"}`,
+        `   Error details: ${(error as any).stack?.split("\n")[0] || "N/A"}`,
       );
 
       // Check if it's a file not found error
@@ -653,7 +677,7 @@ export class ImageProcessor extends WorkerHost {
       }
 
       // Check if it's a corruption error that indicates we should skip this file
-      const errorMessage = error.message || "";
+      const errorMessage = (error as any).message || "";
       if (
         errorMessage.includes("bad seek") ||
         errorMessage.includes("Unexpected end of file") ||
@@ -669,7 +693,7 @@ export class ImageProcessor extends WorkerHost {
         throw new Error(`HEIC_CORRUPTED: ${errorMessage}`);
       }
 
-      throw new Error(`HEIC/HEIF conversion failed: ${error.message}`);
+      throw new Error(`HEIC/HEIF conversion failed: ${(error as any).message}`);
     }
   }
 
@@ -746,7 +770,17 @@ export class ImageProcessor extends WorkerHost {
   async processGeneratePreview(
     job: Job<{ bucket: string; key: string }>,
   ): Promise<any> {
-    const { bucket, key } = job.data;
+    const { bucket } = job.data;
+    let key = job.data.key;
+    // Sanitize path: remove "null_" prefix which indicates missing session/batch ID
+    if (key.includes("/null_")) {
+      console.warn(`⚠️  WARNING: Found null_ prefix in path - this indicates missing session/batch ID`);
+      console.warn(`   Original path: ${key}`);
+      // Remove "null_" to allow processing with sanitized path
+      key = key.replace(/\/null_/g, "/");
+      console.warn(`   Sanitized path: ${key}`);
+    }
+    
     const startTime = Date.now();
     const startMemory = process.memoryUsage();
 
@@ -841,7 +875,7 @@ export class ImageProcessor extends WorkerHost {
           processKey = await this.convertHeicToWebp(bucket, key);
           console.log(`✅ HEIC converted successfully`);
         } catch (conversionError) {
-          if (conversionError.message?.startsWith("HEIC_CORRUPTED:")) {
+          if ((conversionError as any).message?.startsWith("HEIC_CORRUPTED:")) {
             console.log(`⏭️  Skipping corrupted HEIC/HEIF file`);
             this.skippedCount++;
             console.log(
@@ -851,7 +885,7 @@ export class ImageProcessor extends WorkerHost {
               skipped: true,
               reason: "Corrupted or unsupported HEIC/HEIF file",
               fileType: fileExtension || "unknown",
-              error: conversionError.message.replace("HEIC_CORRUPTED: ", ""),
+              error: (conversionError as any).message.replace("HEIC_CORRUPTED: ", ""),
               originalKey: key,
             };
           }
@@ -945,9 +979,9 @@ export class ImageProcessor extends WorkerHost {
         this.logger.log(`✅ Verified: File exists in S3`);
       } catch (verifyError) {
         this.logger.error(
-          `❌ Upload verification failed: ${verifyError.message}`,
+          `❌ Upload verification failed: ${(verifyError as any).message}`,
         );
-        throw new Error(`Upload verification failed: ${verifyError.message}`);
+        throw new Error(`Upload verification failed: ${(verifyError as any).message}`);
       }
 
       const endTime = Date.now();
@@ -963,7 +997,8 @@ export class ImageProcessor extends WorkerHost {
 
       return { previewKey, originalKey: key };
     } catch (error) {
-      this.logger.error(`❌ Failed to process ${key}: ${error.message}`);
+      this.logger.error(`❌ Failed to process ${key}: ${(error as any).message}`);
+        this.logger.error(`❌ Failed to process ${key}: ${(error as any).message}`);
       throw error;
     }
   }
