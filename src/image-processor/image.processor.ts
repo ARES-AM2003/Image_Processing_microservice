@@ -54,6 +54,18 @@ export class ImageProcessor extends WorkerHost {
   private totalProcessingTime = 0;
   private activeJobs = new Set<string>();
 
+  private maskSecret(value: string | undefined): string {
+    if (!value) {
+      return "<missing>";
+    }
+
+    if (value.length <= 6) {
+      return "***";
+    }
+
+    return `${value.slice(0, 3)}***${value.slice(-3)}`;
+  }
+
   // Supported image formats
   // Note: RAW formats support depends on libvips/Sharp compilation and system libraries
   private readonly supportedImageFormats = [
@@ -142,6 +154,10 @@ export class ImageProcessor extends WorkerHost {
         }),
       }),
     });
+
+    this.logger.warn(
+      `S3 env debug: region=${process.env.S3_REGION || "<missing>"}, endpoint=${process.env.S3_ENDPOINT || "<missing>"}, accessKeyId=${this.maskSecret(process.env.S3_ACCESS_KEY)}, secretAccessKey=${this.maskSecret(process.env.S3_SECRET_KEY)}`,
+    );
 
     // S3 Configuration loaded
   }
