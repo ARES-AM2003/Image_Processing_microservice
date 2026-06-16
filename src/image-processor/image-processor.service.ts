@@ -65,8 +65,19 @@ export class ImageProcessorService implements OnModuleInit, OnModuleDestroy {
 
   private registerEventListeners() {
     this.queueEvents.on("completed", async ({ jobId, returnvalue }) => {
-      this.logger.log(`Job ${jobId} completed successfully`);
-      await this.onJobCompleted(jobId, returnvalue);
+      // QueueEvents sends returnvalue as a JSON string — parse it safely
+      let parsedReturnValue: any = returnvalue;
+      if (typeof returnvalue === "string") {
+        try {
+          parsedReturnValue = JSON.parse(returnvalue);
+        } catch {
+          parsedReturnValue = undefined;
+        }
+      }
+      this.logger.log(
+        `Job ${jobId} completed — skipped=${parsedReturnValue?.skipped ?? false}, hasPreview=${!!parsedReturnValue?.previewKey}`,
+      );
+      await this.onJobCompleted(jobId, parsedReturnValue);
     });
 
     this.queueEvents.on("failed", (job, err) => {
@@ -80,12 +91,35 @@ export class ImageProcessorService implements OnModuleInit, OnModuleDestroy {
 
   private async onJobCompleted(jobId: string, returnvalue?: any): Promise<void> {
     try {
-      // Priority 1: worker returned originalKey in its return value
+      // Save the in-memory key BEFORE deleting so Priority 2 can still use it
+      const memoryFileKey = this.jobIdToFileKey.get(jobId);
+      this.jobIdToFileKey.delete(jobId);
+
+      // ─── GUARD: only update preview status when a real preview was generated ───
+      // Jobs that are skipped (non-image, RAW, corrupted HEIC, etc.) return
+      // { skipped: true } — we must NOT mark those as preview-ready.
+      // Jobs that actually produced a preview always return { previewKey, originalKey }.
+      if (returnvalue?.skipped === true) {
+        this.logger.log(
+          `Job ${jobId} was skipped (reason: ${returnvalue?.reason ?? "unknown"}) — no preview status update`,
+        );
+        return;
+      }
+
+      // Also require that a previewKey was actually produced and S3-verified
+      if (!returnvalue?.previewKey) {
+        this.logger.warn(
+          `Job ${jobId} completed but returned no previewKey — skipping status update. returnvalue=${JSON.stringify(returnvalue)}`,
+        );
+        return;
+      }
+
+      // Priority 1: worker returned originalKey in its return value (already parsed)
       let fileKey: string | undefined = returnvalue?.originalKey;
 
       // Priority 2: in-memory map registered at enqueue time (works even after removeOnComplete)
       if (!fileKey) {
-        fileKey = this.jobIdToFileKey.get(jobId);
+        fileKey = memoryFileKey;
       }
 
       // Priority 3: fetch from Redis (only works if removeOnComplete hasn't fired yet)
@@ -94,14 +128,12 @@ export class ImageProcessorService implements OnModuleInit, OnModuleDestroy {
         fileKey = completedJob?.data?.key;
       }
 
-      // Always clean up the lookup map entry
-      this.jobIdToFileKey.delete(jobId);
-
       if (!fileKey || typeof fileKey !== "string") {
         this.logger.warn(`Could not find file key for completed job ${jobId}`);
         return;
       }
 
+      this.logger.log(`📝 Queueing preview status update for: ${fileKey}`);
       this.pendingPreviewStatusKeys.set(fileKey, 0);
 
       if (this.pendingPreviewStatusKeys.size >= this.previewStatusBatchSize) {

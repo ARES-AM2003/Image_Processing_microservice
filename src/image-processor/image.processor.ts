@@ -734,14 +734,10 @@ export class ImageProcessor extends WorkerHost {
     } catch (error) {
       const conversionTime = Date.now() - startTime;
       console.error(
-          `❌ Failed to convert HEIC/HEIF to WebP after ${conversionTime}ms:`,
-          (error as any).message,
+        `❌ Failed to convert HEIC/HEIF to WebP after ${conversionTime}ms: ${(error as any).message}`,
       );
-        console.error(`   Error code: ${(error as any).code || "unknown"}`);
-      console.error(
-        `   Error details: ${(error as any).stack?.split("\n")[0] || "N/A"}`,
-        `   Error details: ${(error as any).stack?.split("\n")[0] || "N/A"}`,
-      );
+      console.error(`   Error code: ${(error as any).code || "unknown"}`);
+      console.error(`   Error details: ${(error as any).stack?.split("\n")[0] || "N/A"}}`);
 
       // Check if it's a file not found error
       const awsError = error as any;
@@ -845,78 +841,65 @@ export class ImageProcessor extends WorkerHost {
   ): Promise<any> {
     const { bucket } = job.data;
     const key = job.data.key;
-    
+    const fileExtension = key.split(".").pop()?.toLowerCase() || "unknown";
+
     const startTime = Date.now();
     const startMemory = process.memoryUsage();
 
     try {
-      // Step 2: Check if file is an image by content type
+      // Step 2: Check if file is an image by content type / extension
       const isImage = await this.isImageFile(bucket, key);
       if (!isImage) {
         console.log(`⏭️  Skipping - Not an image file (content type check)`);
         this.skippedCount++;
-        console.log(
-          `📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
-        );
+        console.log(`📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`);
         return {
           skipped: true,
           reason: "Not an image file (content type)",
-          fileType: key.split(".").pop()?.toLowerCase() || "unknown",
+          fileType: fileExtension,
           originalKey: key,
         };
       }
 
-      // Step 3: Validate actual image content
+      // Step 3: Skip RAW files BEFORE downloading — avoids pulling the entire file from S3
+      if (this.isRawFormat(key)) {
+        console.log(`⏭️  Skipping - RAW format files are not supported for preview generation`);
+        this.skippedCount++;
+        console.log(`📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`);
+        return {
+          skipped: true,
+          reason: "RAW format not supported",
+          fileType: fileExtension,
+          originalKey: key,
+        };
+      }
+
+      // Step 4: Validate actual image content (downloads the file — RAW already excluded above)
       const isValidImage = await this.validateImageContent(bucket, key);
       if (!isValidImage) {
         console.log(`⏭️  Skipping - Not a valid image file (content check)`);
         this.skippedCount++;
-        console.log(
-          `📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
-        );
+        console.log(`📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`);
         return {
           skipped: true,
           reason: "Not a valid image file (content)",
-          fileType: key.split(".").pop()?.toLowerCase() || "unknown",
+          fileType: fileExtension,
           originalKey: key,
         };
       }
 
-      // Step 4: Determine output format and preview key
-      const fileExtension = key.split(".").pop()?.toLowerCase();
-      const isPng = fileExtension === "png";
+      // Step 5: Determine output format and preview key
       const isWebp = fileExtension === "webp";
-      const isJpeg = fileExtension === "jpg" || fileExtension === "jpeg";
       const isHeic = this.isHeicFormat(key);
-      const isRaw = this.isRawFormat(key);
 
-      // Skip RAW files - they are not supported for processing
-      if (isRaw) {
-        console.log(
-          `⏭️  Skipping - RAW format files are not supported for preview generation`,
-        );
-        this.skippedCount++;
-        console.log(
-          `📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
-        );
-        return {
-          skipped: true,
-          reason: "RAW format not supported",
-          fileType: fileExtension || "unknown",
-          originalKey: key,
-        };
-      }
-
-      // Determine output extension: everything becomes WebP for optimal compression
-      const outputExt = "webp";
-
+      // Everything becomes WebP for optimal web compression
       const previewKey = key
-        .replace(/\.[^/.]+$/, `.${outputExt}`)
+        .replace(/\.[^/.]+$/, ".webp")
         .replace(/^(Orginal|Original)/, "Preview");
 
       let processKey = key;
 
-      // For HEIC files, we need to convert first (using heic-decode library)
+      // For HEIC files, convert to WebP first using heic-decode library
       if (isHeic) {
         try {
           console.log(`🔄 Converting HEIC file to WebP...`);
@@ -926,13 +909,11 @@ export class ImageProcessor extends WorkerHost {
           if ((conversionError as any).message?.startsWith("HEIC_CORRUPTED:")) {
             console.log(`⏭️  Skipping corrupted HEIC/HEIF file`);
             this.skippedCount++;
-            console.log(
-              `📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
-            );
+            console.log(`📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`);
             return {
               skipped: true,
               reason: "Corrupted or unsupported HEIC/HEIF file",
-              fileType: fileExtension || "unknown",
+              fileType: fileExtension,
               error: (conversionError as any).message.replace("HEIC_CORRUPTED: ", ""),
               originalKey: key,
             };
@@ -941,11 +922,9 @@ export class ImageProcessor extends WorkerHost {
         }
       }
 
-      console.log(
-        `📸 Processing image (Start: ${Math.round(startMemory.heapUsed / 1024 / 1024)}MB)`,
-      );
+      console.log(`📸 Processing image (Start: ${Math.round(startMemory.heapUsed / 1024 / 1024)}MB)`);
 
-      // Load source object first to avoid unknown-length streaming upload issues
+      // Load source object — avoids unknown-length streaming upload issues
       const sourceBuffer = await this.getObjectAsBuffer(bucket, processKey);
 
       // Production Sharp transform with aggressive optimization
@@ -964,28 +943,23 @@ export class ImageProcessor extends WorkerHost {
         fastShrinkOnLoad: true,
       });
 
-      // Apply WebP compression (optimal for web previews)
-      let contentType = "image/webp";
-      let outputFormat = "webp";
-
       if (isWebp) {
-        console.log(`📦 Compressing WebP`);
+        console.log(`📦 Compressing existing WebP`);
       } else {
         console.log(`🔄 Converting to WebP (${fileExtension} -> webp)`);
       }
 
       sharpTransform = sharpTransform.webp({
-        quality: 70, // Matches JPEG 70 visual quality with 30% smaller file size
-        effort: 6, // Maximum compression effort (automatic progressive loading)
-        smartSubsample: true, // Better quality preservation
+        quality: 70,      // Matches JPEG 70 visual quality with ~30% smaller file size
+        effort: 6,        // Maximum compression effort
+        smartSubsample: true, // Better chroma quality
         force: true,
       });
 
-      // Log upload parameters for debugging
-      this.logger.log(`📤 Starting main preview upload`);
-
+      this.logger.log(`📤 Starting main preview upload to ${previewKey}`);
       const outputBuffer = await sharpTransform.toBuffer();
 
+      // Upload with automatic retry on transient S3 errors
       let uploadAttempts = 0;
       const maxUploadAttempts = 5;
       while (uploadAttempts < maxUploadAttempts) {
@@ -996,7 +970,7 @@ export class ImageProcessor extends WorkerHost {
               Key: previewKey,
               Body: outputBuffer,
               ContentLength: outputBuffer.length,
-              ContentType: contentType,
+              ContentType: "image/webp",
               StorageClass: "STANDARD",
             }),
           );
@@ -1011,42 +985,33 @@ export class ImageProcessor extends WorkerHost {
           ) {
             throw uploadError;
           }
-          this.logger.warn(`⚠️ Upload failed (attempt ${uploadAttempts}/${maxUploadAttempts}): ${uploadError.message}. Retrying...`);
+          this.logger.warn(
+            `⚠️ Upload failed (attempt ${uploadAttempts}/${maxUploadAttempts}): ${uploadError.message}. Retrying...`,
+          );
           await new Promise((resolve) => setTimeout(resolve, uploadAttempts * 2000));
         }
       }
 
-      // Log upload result details for debugging
-      this.logger.log(`📤 Upload successful`);
-
-      // Verify the file was actually uploaded by checking if it exists
+      // Confirm the preview actually exists in S3 before marking it complete
       try {
         await this.s3Client.send(
           new HeadObjectCommand({ Bucket: bucket, Key: previewKey }),
         );
-        this.logger.log(`✅ Verified: File exists in S3`);
+        this.logger.log(`✅ S3 verified: preview exists at ${previewKey}`);
       } catch (verifyError) {
-        this.logger.error(
-          `❌ Upload verification failed: ${(verifyError as any).message}`,
-        );
-        throw new Error(`Upload verification failed: ${(verifyError as any).message}`);
+        throw new Error(`Upload verification failed — file not found in S3 after upload: ${(verifyError as any).message}`);
       }
 
-      const endTime = Date.now();
-      const endMemory = process.memoryUsage();
-      const processingTime = endTime - startTime;
+      const processingTime = Date.now() - startTime;
       const memoryDelta = Math.round(
-        (endMemory.heapUsed - startMemory.heapUsed) / 1024 / 1024,
+        (process.memoryUsage().heapUsed - startMemory.heapUsed) / 1024 / 1024,
       );
+      this.logger.log(`✅ Completed in ${processingTime}ms (Memory: +${memoryDelta}MB)`);
 
-      this.logger.log(
-        `✅ Completed in ${processingTime}ms (Memory: +${memoryDelta}MB)`,
-      );
-
+      // Return BOTH keys — service uses previewKey as the gate for status updates
       return { previewKey, originalKey: key };
     } catch (error) {
       this.logger.error(`❌ Failed to process ${key}: ${(error as any).message}`);
-        this.logger.error(`❌ Failed to process ${key}: ${(error as any).message}`);
       throw error;
     }
   }
