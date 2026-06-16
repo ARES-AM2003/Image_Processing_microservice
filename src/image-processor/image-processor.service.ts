@@ -75,7 +75,7 @@ export class ImageProcessorService implements OnModuleInit, OnModuleDestroy {
         }
       }
       this.logger.log(
-        `Job ${jobId} completed — skipped=${parsedReturnValue?.skipped ?? false}, hasPreview=${!!parsedReturnValue?.previewKey}`,
+        `Job ${jobId} completed — skipped=${parsedReturnValue?.skipped ?? false}, hasPreview=${!!parsedReturnValue?.previewKey}, workerSchema=${parsedReturnValue?.workerSchema ?? "missing"}`,
       );
       await this.onJobCompleted(jobId, parsedReturnValue);
     });
@@ -103,8 +103,10 @@ export class ImageProcessorService implements OnModuleInit, OnModuleDestroy {
       if (returnvalue?.skipped === true) {
         const reason = returnvalue?.reason ?? "unknown";
         if (reason !== "Preview already exists") {
+          const payload =
+            reason === "unknown" ? ` returnvalue=${JSON.stringify(returnvalue)}` : "";
           this.logger.log(
-            `Job ${jobId} was skipped (reason: ${reason}) — no preview status update`,
+            `Job ${jobId} was skipped (reason: ${reason}) — no preview status update.${payload}`,
           );
           return;
         }

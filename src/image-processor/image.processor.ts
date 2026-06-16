@@ -36,6 +36,8 @@ const SHARP_THREADS_PER_JOB = Math.min(
   Math.max(1, Math.floor(os.cpus().length / WORKER_CONCURRENCY)),
 );
 
+const WORKER_RETURN_SCHEMA = "preview-worker-v2";
+
 @Processor("image-processing", {
   concurrency: WORKER_CONCURRENCY, // Process multiple jobs in parallel, utilizing idle I/O time
   lockDuration: 300000, // 5 minutes lock duration for long-running jobs
@@ -55,6 +57,13 @@ export class ImageProcessor extends WorkerHost {
   private skippedCount = 0;
   private totalProcessingTime = 0;
   private activeJobs = new Set<string>();
+
+  private withWorkerSchema<T extends Record<string, any>>(result: T): T {
+    return {
+      ...result,
+      workerSchema: WORKER_RETURN_SCHEMA,
+    };
+  }
 
   private maskSecret(value: string | undefined): string {
     if (!value) {
@@ -860,12 +869,12 @@ export class ImageProcessor extends WorkerHost {
       if (previewAlreadyExists) {
         console.log(`⏭️  Skipping — preview already exists at ${previewKeyEarly}`);
         this.skippedCount++;
-        return {
+        return this.withWorkerSchema({
           skipped: true,
           reason: "Preview already exists",
           previewKey: previewKeyEarly, // include so service can still mark it ready if needed
           originalKey: key,
-        };
+        });
       }
 
       // Step 2: Check if file is an image by content type / extension
@@ -874,12 +883,12 @@ export class ImageProcessor extends WorkerHost {
         console.log(`⏭️  Skipping - Not an image file (content type check)`);
         this.skippedCount++;
         console.log(`📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`);
-        return {
+        return this.withWorkerSchema({
           skipped: true,
           reason: "Not an image file (content type)",
           fileType: fileExtension,
           originalKey: key,
-        };
+        });
       }
 
       // Step 3: Skip RAW files BEFORE downloading — avoids pulling the entire file from S3
@@ -887,12 +896,12 @@ export class ImageProcessor extends WorkerHost {
         console.log(`⏭️  Skipping - RAW format files are not supported for preview generation`);
         this.skippedCount++;
         console.log(`📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`);
-        return {
+        return this.withWorkerSchema({
           skipped: true,
           reason: "RAW format not supported",
           fileType: fileExtension,
           originalKey: key,
-        };
+        });
       }
 
       // Step 4: Validate actual image content (downloads the file — RAW already excluded above)
@@ -901,12 +910,12 @@ export class ImageProcessor extends WorkerHost {
         console.log(`⏭️  Skipping - Not a valid image file (content check)`);
         this.skippedCount++;
         console.log(`📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`);
-        return {
+        return this.withWorkerSchema({
           skipped: true,
           reason: "Not a valid image file (content)",
           fileType: fileExtension,
           originalKey: key,
-        };
+        });
       }
 
       // Step 5: Determine output format and preview key
@@ -931,13 +940,13 @@ export class ImageProcessor extends WorkerHost {
             console.log(`⏭️  Skipping corrupted HEIC/HEIF file`);
             this.skippedCount++;
             console.log(`📊 Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`);
-            return {
+            return this.withWorkerSchema({
               skipped: true,
               reason: "Corrupted or unsupported HEIC/HEIF file",
               fileType: fileExtension,
               error: (conversionError as any).message.replace("HEIC_CORRUPTED: ", ""),
               originalKey: key,
-            };
+            });
           }
           throw conversionError;
         }
@@ -1030,7 +1039,7 @@ export class ImageProcessor extends WorkerHost {
       this.logger.log(`✅ Completed in ${processingTime}ms (Memory: +${memoryDelta}MB)`);
 
       // Return BOTH keys — service uses previewKey as the gate for status updates
-      return { previewKey, originalKey: key };
+      return this.withWorkerSchema({ previewKey, originalKey: key });
     } catch (error) {
       this.logger.error(`❌ Failed to process ${key}: ${(error as any).message}`);
       throw error;
