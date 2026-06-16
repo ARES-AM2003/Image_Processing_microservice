@@ -238,32 +238,26 @@ export class ImageProcessor extends WorkerHost {
   onWorkerError(error: Error): void {
     this.logger.error(`Worker error: ${error.message}`);
   }
- private async getPresignedCdnUrl(
-  bucket: string,
-  key: string,
-): Promise<string> {
-  const signedUrl = await getSignedUrl(
-    this.s3Client,
-    new GetObjectCommand({
-      Bucket: bucket,
-      Key: key,
-    }),
-    {
-      expiresIn: 60 * 60 * 4,
-    },
-  );
+  private async getPresignedCdnUrl(
+    _bucket: string,
+    key: string,
+  ): Promise<string> {
+    const response = await fetch(
+      `https://prod.fotosfolio.com/uploads/presigned-url/get/${encodeURIComponent(key)}`,
+    );
 
-  const parsed = new URL(signedUrl);
-  this.logger.debug(`Generated presigned URL: ${signedUrl}`);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to get presigned URL for ${key}: ${response.status} ${response.statusText}`,
+      );
+    }
 
-  const bucketPrefix = `/${bucket}`;
+    const data = await response.json() as { url: string };
 
-  const path = parsed.pathname.startsWith(bucketPrefix)
-    ? parsed.pathname.slice(bucketPrefix.length)
-    : parsed.pathname;
+    this.logger.debug(`Generated presigned URL: ${data.url}`);
 
-  return `https://cdn.fotosfolio.com${path}${parsed.search}`;
-}
+    return data.url;
+  }
 
   // private async getObjectAsBuffer(bucket: string, key: string): Promise<Buffer> {
   //   const result = await this.s3Client.send(
