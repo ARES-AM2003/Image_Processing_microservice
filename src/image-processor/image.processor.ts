@@ -254,6 +254,7 @@ export class ImageProcessor extends WorkerHost {
   );
 
   const parsed = new URL(signedUrl);
+  this.logger.debug(`Generated presigned URL: ${signedUrl}`);
 
   const bucketPrefix = `/${bucket}`;
 
