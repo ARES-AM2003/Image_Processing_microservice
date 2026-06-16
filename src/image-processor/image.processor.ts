@@ -5,6 +5,7 @@ import sharp from "sharp";
 import {
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -301,8 +302,65 @@ export class ImageProcessor extends WorkerHost {
       if (awsError?.name === "NotFound" || awsError?.$metadata?.httpStatusCode === 404) {
         return false;
       }
-      // Re-throw other errors (permission issues, etc.)
-      throw error;
+
+      const message = awsError?.message || "Unknown S3 error";
+      throw new Error(`S3 existence check failed for ${bucket}/${key}: ${message}`);
+    }
+  }
+
+  /**
+   * Resolve the best matching S3 key for an image job.
+   *
+   * We still prefer an exact match, but if the exact key is missing we look
+   * inside the same parent prefix for a file with the same basename.
+   */
+  private async resolveS3InputKey(bucket: string, key: string): Promise<string | null> {
+    const normalizedKey = key.replace(/^\/+/, "").replace(/\/\/+/g, "/");
+
+    if (await this.fileExists(bucket, normalizedKey)) {
+      return normalizedKey;
+    }
+
+    const lastSlashIndex = normalizedKey.lastIndexOf("/");
+    if (lastSlashIndex < 0) {
+      return null;
+    }
+
+    const prefix = normalizedKey.slice(0, lastSlashIndex + 1);
+    const fileName = normalizedKey.slice(lastSlashIndex + 1);
+
+    try {
+      const response = await this.s3Client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: prefix,
+        }),
+      );
+
+      const matches = (response.Contents || [])
+        .map((item) => item.Key)
+        .filter((candidate): candidate is string => Boolean(candidate))
+        .filter((candidate) => path.basename(candidate) === fileName);
+
+      if (matches.length === 1) {
+        this.logger.warn(
+          `⚠️  Exact key miss for ${normalizedKey}; using close S3 match ${matches[0]}`,
+        );
+        return matches[0];
+      }
+
+      if (matches.length > 1) {
+        this.logger.warn(
+          `⚠️  Multiple S3 matches found for ${normalizedKey}; refusing ambiguous fallback`,
+        );
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.warn(
+        `⚠️  S3 prefix lookup failed for ${bucket}/${prefix}: ${(error as any).message}`,
+      );
+      return null;
     }
   }
 
@@ -785,16 +843,9 @@ export class ImageProcessor extends WorkerHost {
     const startMemory = process.memoryUsage();
 
     try {
-      // Step 1: Check if file exists in S3
-      const exists = await this.fileExists(bucket, key);
-      if (!exists) {
-        console.error(`❌ Skipping - File does not exist in S3`);
-        this.skippedCount++;
-        console.log(
-          `📊 Current Stats: Processed=${this.processedCount}, Skipped=${this.skippedCount}`,
-        );
-        throw new Error(`File not found in S3`);
-      }
+      // Temporarily bypass the S3 existence preflight check.
+      // We will let the actual object read fail if the key is wrong.
+      console.warn(`⚠️  Skipping S3 existence check for ${bucket}/${key}`);
 
       // Step 2: Check if file is an image by content type
       const isImage = await this.isImageFile(bucket, key);
