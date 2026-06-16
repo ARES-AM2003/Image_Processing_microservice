@@ -1,10 +1,12 @@
 import { OnWorkerEvent, Processor, WorkerHost } from "@nestjs/bullmq";
 import { Job } from "bullmq";
-import { Logger } from "@nestjs/common";
+import { Logger, OnModuleInit } from "@nestjs/common";
 import sharp from "sharp";
 import {
   GetObjectCommand,
+  HeadBucketCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -156,10 +158,64 @@ export class ImageProcessor extends WorkerHost {
     });
 
     this.logger.warn(
-      `S3 env debug: region=${process.env.S3_REGION || "<missing>"}, endpoint=${process.env.S3_ENDPOINT || "<missing>"}, accessKeyId=${this.maskSecret(process.env.S3_ACCESS_KEY)}, secretAccessKey=${this.maskSecret(process.env.S3_SECRET_KEY)}`,
+      `S3 env debug: region=${process.env.S3_REGION || "<missing>"}, endpoint=${process.env.S3_ENDPOINT || "<missing>"}, bucket=${process.env.S3_BUCKET_NAME || "<missing>"}, accessKeyId=${this.maskSecret(process.env.S3_ACCESS_KEY)}, secretAccessKey=${this.maskSecret(process.env.S3_SECRET_KEY)}`,
     );
 
     // S3 Configuration loaded
+  }
+
+  async onModuleInit(): Promise<void> {
+    const bucket = process.env.S3_BUCKET_NAME?.trim();
+
+    if (!bucket) {
+      this.logger.warn("S3 startup probe skipped because S3_BUCKET_NAME is missing");
+      return;
+    }
+
+    try {
+      await this.s3Client.send(new HeadBucketCommand({ Bucket: bucket }));
+      this.logger.log(`✅ S3 startup probe succeeded for bucket ${bucket}`);
+    } catch (error) {
+      try {
+        await this.s3Client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            MaxKeys: 1,
+          }),
+        );
+
+        this.logger.log(
+          `✅ S3 startup probe succeeded for bucket ${bucket} via ListObjectsV2 fallback`,
+        );
+        return;
+      } catch (fallbackError) {
+        const primary = this.describeS3Error(error);
+        const fallback = this.describeS3Error(fallbackError);
+        this.logger.error(
+          `❌ S3 startup probe failed for bucket ${bucket}: HeadBucket=${primary}; ListObjectsV2=${fallback}`,
+        );
+      }
+    }
+  }
+
+  private describeS3Error(error: unknown): string {
+    const awsError = error as {
+      name?: string;
+      message?: string;
+      Code?: string;
+      code?: string;
+      $metadata?: { httpStatusCode?: number; requestId?: string };
+    };
+
+    const parts = [
+      awsError?.name,
+      awsError?.Code || awsError?.code,
+      awsError?.$metadata?.httpStatusCode ? `HTTP ${awsError.$metadata.httpStatusCode}` : undefined,
+      awsError?.$metadata?.requestId ? `requestId=${awsError.$metadata.requestId}` : undefined,
+      awsError?.message,
+    ].filter(Boolean);
+
+    return parts.length > 0 ? parts.join(" | ") : String(error);
   }
 
   @OnWorkerEvent("error")

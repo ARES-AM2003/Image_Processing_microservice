@@ -83,8 +83,9 @@ export class ImageProcessorService implements OnModuleDestroy {
         await this.flushPreviewStatusBatch();
       }
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `Failed to prepare preview status update for job ${jobId}: ${error.message}`,
+        `Failed to prepare preview status update for job ${jobId}: ${errorMessage}`,
       );
     }
   }
@@ -135,16 +136,17 @@ export class ImageProcessorService implements OnModuleDestroy {
         `✅ Preview status updated for ${fileKeys.length} file(s). Result: ${JSON.stringify(result)}`,
       );
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       for (const key of fileKeys) {
         const retryCount = (this.pendingPreviewStatusKeys.get(key) || 0) + 1;
         if (retryCount <= 3) {
           this.pendingPreviewStatusKeys.set(key, retryCount);
           this.logger.warn(
-            `⚠️  Retrying status update for ${key} (attempt ${retryCount}/3): ${error.message}`,
+            `⚠️  Retrying status update for ${key} (attempt ${retryCount}/3): ${errorMessage}`,
           );
         } else {
           this.logger.error(
-            `❌ Max retries reached for ${key}. Giving up after 3 attempts. Error: ${error.message}`,
+            `❌ Max retries reached for ${key}. Giving up after 3 attempts. Error: ${errorMessage}`,
           );
         }
       }
@@ -154,6 +156,7 @@ export class ImageProcessorService implements OnModuleDestroy {
   }
 
   async addImageJob(bucket: string, key: string) {
+    bucket = this.resolveBucket(bucket);
     await this.ensureQueueCapacity(1);
 
     this.logger.log(`Adding image job`);
@@ -175,8 +178,10 @@ export class ImageProcessorService implements OnModuleDestroy {
     keys: string[],
     batchSize = Number(process.env.BATCH_SIZE || this.enqueueChunkSize),
   ) {
+    bucket = this.resolveBucket(bucket);
     const startTime = Date.now();
     const uniqueKeys = [...new Set(keys)];
+
     const existingChecks = await Promise.all(
       uniqueKeys.map(async (key) => {
         const jobId = this.buildDeterministicJobId("generate-preview", bucket, key);
@@ -253,6 +258,7 @@ export class ImageProcessorService implements OnModuleDestroy {
   }
 
   async testHeicConversion(bucket: string, key: string) {
+    bucket = this.resolveBucket(bucket);
     this.logger.log(`Testing HEIC/HEIF conversion`);
     return this.queue.add(
       "test-heic-conversion",
@@ -295,7 +301,8 @@ export class ImageProcessorService implements OnModuleDestroy {
         // or we rely on clean() to remove it once the lock expires if the worker is dead.
         this.logger.debug(`  🛑 Active job ${job.id} cannot be forcibly stopped safely without lock token`);
       } catch (error) {
-        this.logger.warn(`  ⚠️  Error handling active job ${job.id}: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`  ⚠️  Error handling active job ${job.id}: ${errorMessage}`);
       }
     }
 
@@ -370,6 +377,32 @@ export class ImageProcessorService implements OnModuleDestroy {
       .update(`${jobName}:${bucket}:${key}`)
       .digest("hex");
     return `img_${hash}`;
+  }
+
+  private resolveBucket(bucket: string): string {
+    const providedBucket = bucket?.trim();
+    const configuredBucket = process.env.S3_BUCKET_NAME?.trim();
+
+    const isPlaceholderBucket =
+      !providedBucket ||
+      /^YOUR_BUCKET_NAME$/i.test(providedBucket) ||
+      /^S3_BUCKET_NAME$/i.test(providedBucket) ||
+      /^<.*>$/.test(providedBucket);
+
+    if (!isPlaceholderBucket) {
+      return providedBucket;
+    }
+
+    if (configuredBucket) {
+      this.logger.warn(
+        `Using configured S3 bucket ${configuredBucket} because request bucket was missing or a placeholder`,
+      );
+      return configuredBucket;
+    }
+
+    throw new Error(
+      `S3 bucket is required. Set body.bucket or S3_BUCKET_NAME in the environment.`,
+    );
   }
 
   async pauseQueue() {
