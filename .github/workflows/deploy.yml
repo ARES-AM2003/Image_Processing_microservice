@@ -155,7 +155,6 @@ jobs:
               echo "🚀 Starting image-processor-$i..."
               docker run -d \
                 --name image-processor-$i \
-                --network live-db-redis_fotosfolio-production-network \
                 --env-file /opt/image-processor/.env \
                 --restart unless-stopped \
                 --memory=1g \
