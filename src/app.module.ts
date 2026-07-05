@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { BullModule } from "@nestjs/bullmq";
 import { ImageProcessorModule } from "./image-processor/image-processor.module";
+import { HealthController } from "./health.controller";
 
 @Module({
   imports: [
@@ -30,5 +31,6 @@ import { ImageProcessorModule } from "./image-processor/image-processor.module";
     }),
     ImageProcessorModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule {}

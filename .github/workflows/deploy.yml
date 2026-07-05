@@ -73,7 +73,7 @@ jobs:
               --health-interval=30s \
               --health-retries=3 \
               --health-timeout=10s \
-              --health-start-period=60s \
+              --health-start-period=90s \
               $IMAGE
 
             echo "⏳ Waiting up to 4 minutes for container to become healthy..."
@@ -141,7 +141,6 @@ jobs:
               echo "✅ $name is healthy"
             }
 
-            # ── Stop & remove all 5 existing replicas ─────────────────────────
             echo "🛑 Stopping existing containers..."
             for i in 1 2 3 4 5; do
               docker stop image-processor-$i || true
@@ -151,27 +150,9 @@ jobs:
             echo "🗑️  Removing old v1 image..."
             docker rmi blueneontech/imageprocessor:v1 || true
 
-            # ── Container 1 — internal worker, no exposed ports ─────────────────
-            echo "🚀 Starting image-processor-1 (no exposed port)..."
-            docker run -d \
-              --name image-processor-1 \
-              --network live-db-redis_fotosfolio-production-network \
-              --env-file /opt/image-processor/.env \
-              --restart unless-stopped \
-              --memory=1g \
-              --memory-swap=1g \
-              --health-cmd='wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1' \
-              --health-interval=30s \
-              --health-retries=3 \
-              --health-timeout=10s \
-              --health-start-period=60s \
-              $IMAGE
-
-            wait_healthy image-processor-1
-
-            # ── Containers 2-5 — internal workers, no exposed ports ───────────
-            for i in 2 3 4 5; do
-              echo "🚀 Starting image-processor-$i (no exposed port)..."
+            # ── Containers 1-5 — all internal, no exposed ports ───────────────
+            for i in 1 2 3 4 5; do
+              echo "🚀 Starting image-processor-$i..."
               docker run -d \
                 --name image-processor-$i \
                 --network live-db-redis_fotosfolio-production-network \
@@ -183,7 +164,7 @@ jobs:
                 --health-interval=30s \
                 --health-retries=3 \
                 --health-timeout=10s \
-                --health-start-period=60s \
+                --health-start-period=90s \
                 $IMAGE
 
               wait_healthy image-processor-$i
