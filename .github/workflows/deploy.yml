@@ -27,7 +27,9 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: blueneontech/imageprocessor:v1
+          tags: |
+            blueneontech/imageprocessor:v1
+            blueneontech/imageprocessor:${{ github.sha }}
           no-cache: true
           platforms: linux/amd64
 
@@ -42,25 +44,28 @@ jobs:
           username: ${{ secrets.DO_USERNAME }}
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
+            set -e
+            IMAGE="blueneontech/imageprocessor:${{ github.sha }}"
+
             echo "🔐 Logging in to Docker Hub..."
             docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+
+            echo "⬇️  Pulling latest image BEFORE stopping the old container..."
+            docker pull $IMAGE
 
             echo "🛑 Stopping existing container..."
             docker stop image-processor || true
             docker rm image-processor || true
 
-            echo "🗑️  Removing old image..."
+            echo "🗑️  Removing old v1 image..."
             docker rmi blueneontech/imageprocessor:v1 || true
-
-            echo "⬇️  Pulling latest image..."
-            docker pull blueneontech/imageprocessor:v1
 
             echo "🚀 Starting new container..."
             docker run -d \
               --name image-processor \
               --network live-db-redis_fotosfolio-production-network \
               --env-file /opt/image-processor/.env \
-              -p 3001 \
+              -p 32817:3001 \
               --restart unless-stopped \
               --memory=1g \
               --memory-swap=1g \
@@ -68,10 +73,123 @@ jobs:
               --health-interval=30s \
               --health-retries=3 \
               --health-timeout=10s \
-              --health-start-period=40s \
-              blueneontech/imageprocessor:v1
+              --health-start-period=60s \
+              $IMAGE
+
+            echo "⏳ Waiting up to 4 minutes for container to become healthy..."
+            HEALTHY=false
+            for i in $(seq 1 24); do
+              STATUS=$(docker inspect --format='{{.State.Health.Status}}' image-processor 2>/dev/null || echo "unknown")
+              echo "   Attempt $i/24 — status: $STATUS"
+              if [ "$STATUS" = "healthy" ]; then
+                HEALTHY=true
+                break
+              fi
+              sleep 10
+            done
+
+            if [ "$HEALTHY" = "false" ]; then
+              echo "❌ Container did not become healthy — last 100 log lines:"
+              docker logs --tail=100 image-processor
+              exit 1
+            fi
 
             echo "🧹 Cleaning up unused images..."
             docker image prune -f
 
             echo "✅ Deployment completed successfully!"
+
+  deploy_hostinger:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy 5 containers to Hostinger
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HO_HOST }}
+          username: ${{ secrets.HO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            set -e
+            IMAGE="blueneontech/imageprocessor:${{ github.sha }}"
+
+            echo "🔐 Logging in to Docker Hub..."
+            docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+
+            echo "⬇️  Pulling latest image BEFORE stopping old containers..."
+            docker pull $IMAGE
+
+            # ── Helper: wait for a named container to become healthy ──────────
+            wait_healthy() {
+              local name="$1"
+              echo "⏳ Waiting up to 4 minutes for $name to become healthy..."
+              local HEALTHY=false
+              for i in $(seq 1 24); do
+                STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$name" 2>/dev/null || echo "unknown")
+                echo "   $name — attempt $i/24 — status: $STATUS"
+                if [ "$STATUS" = "healthy" ]; then
+                  HEALTHY=true
+                  break
+                fi
+                sleep 10
+              done
+              if [ "$HEALTHY" = "false" ]; then
+                echo "❌ $name did not become healthy — last 100 log lines:"
+                docker logs --tail=100 "$name"
+                exit 1
+              fi
+              echo "✅ $name is healthy"
+            }
+
+            # ── Stop & remove all 5 existing replicas ─────────────────────────
+            echo "🛑 Stopping existing containers..."
+            for i in 1 2 3 4 5; do
+              docker stop image-processor-$i || true
+              docker rm   image-processor-$i || true
+            done
+
+            echo "🗑️  Removing old v1 image..."
+            docker rmi blueneontech/imageprocessor:v1 || true
+
+            # ── Container 1 — internal worker, no exposed ports ─────────────────
+            echo "🚀 Starting image-processor-1 (no exposed port)..."
+            docker run -d \
+              --name image-processor-1 \
+              --network live-db-redis_fotosfolio-production-network \
+              --env-file /opt/image-processor/.env \
+              --restart unless-stopped \
+              --memory=1g \
+              --memory-swap=1g \
+              --health-cmd='wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1' \
+              --health-interval=30s \
+              --health-retries=3 \
+              --health-timeout=10s \
+              --health-start-period=60s \
+              $IMAGE
+
+            wait_healthy image-processor-1
+
+            # ── Containers 2-5 — internal workers, no exposed ports ───────────
+            for i in 2 3 4 5; do
+              echo "🚀 Starting image-processor-$i (no exposed port)..."
+              docker run -d \
+                --name image-processor-$i \
+                --network live-db-redis_fotosfolio-production-network \
+                --env-file /opt/image-processor/.env \
+                --restart unless-stopped \
+                --memory=1g \
+                --memory-swap=1g \
+                --health-cmd='wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1' \
+                --health-interval=30s \
+                --health-retries=3 \
+                --health-timeout=10s \
+                --health-start-period=60s \
+                $IMAGE
+
+              wait_healthy image-processor-$i
+            done
+
+            echo "🧹 Cleaning up unused images..."
+            docker image prune -f
+
+            echo "✅ Hostinger deployment completed — 5 containers running!"

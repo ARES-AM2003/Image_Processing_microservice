@@ -15,12 +15,16 @@ import { ImageProcessorModule } from "./image-processor/image-processor.module";
         password: process.env.REDIS_PASSWORD,
         maxRetriesPerRequest: null,
         retryDelayOnFailover: 100,
-        enableReadyCheck: false,
-        lazyConnect: true,
+        // lazyConnect removed — caused BullMQ worker to silently register against
+        // a disconnected socket on startup, requiring a manual container restart
+        // to pick up queued jobs.
+        enableReadyCheck: true,       // fail loudly if Redis is unreachable at boot
         keepAlive: 30000,
         family: 4,
-        connectTimeout: 5000,
+        connectTimeout: 10000,        // give fresh container more time to reach Redis
         commandTimeout: 10000,
+        retryStrategy: (times: number) => Math.min(times * 500, 10000), // exponential back-off, cap 10 s
+        reconnectOnError: () => true, // always reconnect on any socket error
         db: 0,
       },
     }),
